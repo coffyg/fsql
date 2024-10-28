@@ -6,10 +6,10 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/soulkyn-ai/nyxutils"
+	"github.com/coffyg/utils"
 )
 
-var modelFieldsCache = nyxutils.NewSafeMap[*modelInfo]()
+var modelFieldsCache = utils.NewSafeMap[*modelInfo]()
 
 type modelInfo struct {
 	dbTagMap          map[string]string

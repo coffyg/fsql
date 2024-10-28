@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Fy-/octypes"
+	"github.com/coffyg/octypes"
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
