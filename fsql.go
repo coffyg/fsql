@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx" // SQL library
-	_ "github.com/lib/pq" // PostgreSQL driver
+	_ "github.com/lib/pq"     // PostgreSQL driver
 )
 
 var Db *sqlx.DB
@@ -19,9 +19,9 @@ func InitDB(database string) {
 	}
 
 	// Set reasonable limits
-	Db.SetMaxOpenConns(25)
-	Db.SetMaxIdleConns(25)
-	Db.SetConnMaxLifetime(5 * time.Minute)
+	Db.SetMaxOpenConns(100)
+	Db.SetMaxIdleConns(50)
+	Db.SetConnMaxLifetime(60 * time.Minute)
 }
 
 // CloseDB closes the database connection
