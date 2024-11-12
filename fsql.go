@@ -3,7 +3,6 @@ package fsql
 
 import (
 	"log"
-	"time"
 
 	"github.com/jmoiron/sqlx" // SQL library
 	_ "github.com/lib/pq"     // PostgreSQL driver
@@ -19,9 +18,11 @@ func InitDB(database string) {
 	}
 
 	// Set reasonable limits
-	Db.SetMaxOpenConns(100)
-	Db.SetMaxIdleConns(50)
-	Db.SetConnMaxLifetime(60 * time.Minute)
+	/*
+		Db.SetMaxOpenConns(100)
+		Db.SetMaxIdleConns(50)
+		Db.SetConnMaxLifetime(60 * time.Minute)
+	*/
 }
 
 // CloseDB closes the database connection
