@@ -4,15 +4,25 @@ package fsql
 import (
 	"log"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/jmoiron/sqlx" // SQL library
 	_ "github.com/lib/pq"     // PostgreSQL driver
 )
 
 var Db *sqlx.DB
 
+func PgxCreateDB(uri string) (*sqlx.DB, error) {
+	connConfig, _ := pgx.ParseConfig(uri)
+
+	pgxdb := stdlib.OpenDB(*connConfig)
+	return sqlx.NewDb(pgxdb, "pgx"), nil
+}
+
 func InitDB(database string) {
 	var err error
-	Db, err = sqlx.Connect("postgres", database)
+	Db, err = PgxCreateDB(database)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
