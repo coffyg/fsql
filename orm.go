@@ -124,10 +124,11 @@ func (qb *QueryBuilder) Build() string {
 	var joinsList []*Join
 	var whereConditions []string
 	var fields []string
+	var baseFields []string
 	hasJoins := false
 
 	// Collect fields from base table
-	baseFields, _ := GetSelectFields(qb.Table, "")
+	baseFields, _ = GetSelectFields(qb.Table, "")
 	fields = append(fields, baseFields...)
 
 	for _, step := range qb.Steps {
@@ -141,7 +142,7 @@ func (qb *QueryBuilder) Build() string {
 		case JoinStep:
 			hasJoins = true
 			// Collect fields from join table
-			joinFields, _ := GetSelectFields(s.Table, s.TableAlias)
+			joinFields, _ := GetSelectFields(s.Join.Table, s.Join.TableAlias)
 			fields = append(fields, joinFields...)
 			// Add join to joinsList
 			joinsList = append(joinsList, &s.Join)
@@ -150,10 +151,10 @@ func (qb *QueryBuilder) Build() string {
 		}
 	}
 
-	// Build base table
+	// Build base table without using SELECT *
 	var baseTable string
 	if len(baseWheres) > 0 {
-		baseTable = fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", qb.Table, strings.Join(baseWheres, " AND "), qb.Table)
+		baseTable = fmt.Sprintf("(SELECT %s FROM %s WHERE %s) AS %s", strings.Join(baseFields, ", "), qb.Table, strings.Join(baseWheres, " AND "), qb.Table)
 	} else {
 		baseTable = qb.Table
 	}
