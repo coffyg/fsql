@@ -15,8 +15,9 @@ type Join struct {
 }
 
 type QueryBuilder struct {
-	Table string
-	Joins []Join
+	Table  string
+	Joins  []Join
+	Wheres []string
 }
 
 func GetInsertQuery(tableName string, valuesMap map[string]interface{}, returning string) (string, []interface{}) {
@@ -79,8 +80,9 @@ func GetUpdateQuery(tableName string, valuesMap map[string]interface{}, returnin
 
 func SelectBase(table string, alias string) *QueryBuilder {
 	return &QueryBuilder{
-		Table: table,
-		Joins: []Join{},
+		Table:  table,
+		Joins:  []Join{},
+		Wheres: []string{},
 	}
 }
 
@@ -104,6 +106,11 @@ func (qb *QueryBuilder) Join(table string, alias string, on string) *QueryBuilde
 	return qb
 }
 
+func (qb *QueryBuilder) Where(condition string) *QueryBuilder {
+	qb.Wheres = append(qb.Wheres, condition)
+	return qb
+}
+
 func (qb *QueryBuilder) Build() string {
 	fieldsArray, _ := GetSelectFields(qb.Table, "")
 	fields := strings.Join(fieldsArray, ",")
@@ -122,7 +129,14 @@ func (qb *QueryBuilder) Build() string {
 		joins = append(joins, fmt.Sprintf(` %s %s ON %s `, join.JoinType, table, join.OnCondition))
 	}
 
-	return fmt.Sprintf(`SELECT %s FROM "%s" %s`, fields, qb.Table, strings.Join(joins, " "))
+	query := fmt.Sprintf(`SELECT %s FROM "%s" %s`, fields, qb.Table, strings.Join(joins, " "))
+
+	// Include WHERE clauses if any
+	if len(qb.Wheres) > 0 {
+		query += " WHERE " + strings.Join(qb.Wheres, " AND ")
+	}
+
+	return query
 }
 
 func GenNewUUID(table string) string {

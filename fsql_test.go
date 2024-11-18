@@ -87,19 +87,20 @@ func InitAIModel() {
 
 func initRealmModel() {
 	InitModelTagCache(RealmTest{}, "realm")
-	realmQuerySelectBase = SelectBase("realm", "realm").Build()
+	realmQuerySelectBase = SelectBase("realm", "").Build()
 }
 
 func initWebsiteModel() {
 	InitModelTagCache(WebsiteTest{}, "website")
-	websiteQuerySelectBase = SelectBase("website", "website").Left("realm", "r", "website.realm_uuid = r.uuid").Build()
+	websiteQuerySelectBase = SelectBase("website", "").
+		Left("realm", "r", "website.realm_uuid = r.uuid").
+		Build()
 }
 
 func cleanDatabase() error {
 	_, err := Db.Exec(`TRUNCATE TABLE ai_model, website, realm RESTART IDENTITY CASCADE`)
 	return err
 }
-
 func TestAIModelInsertAndFetch(t *testing.T) {
 	// Clean the database before the test
 	if err := cleanDatabase(); err != nil {
@@ -322,4 +323,107 @@ func GetWebsiteByUUID(uuid string) (*WebsiteTest, error) {
 	}
 
 	return &website, nil
+}
+func TestQueryBuilderWhereAndJoin(t *testing.T) {
+	// Clean the database before the test
+	if err := cleanDatabase(); err != nil {
+		t.Fatalf("Failed to clean database: %v", err)
+	}
+
+	// Insert multiple Realms
+	realm1 := RealmTest{
+		UUID:      GenNewUUID(""),
+		Name:      "Realm One",
+		CreatedAt: octypes.NewCustomTime(time.Now()),
+		UpdatedAt: octypes.NewCustomTime(time.Now()),
+	}
+	realm2 := RealmTest{
+		UUID:      GenNewUUID(""),
+		Name:      "Realm Two",
+		CreatedAt: octypes.NewCustomTime(time.Now()),
+		UpdatedAt: octypes.NewCustomTime(time.Now()),
+	}
+	insertRealm(t, realm1)
+	insertRealm(t, realm2)
+
+	// Insert Websites linked to Realms
+	website1 := WebsiteTest{
+		UUID:      GenNewUUID(""),
+		Domain:    "example.com",
+		RealmUUID: realm1.UUID,
+		CreatedAt: *octypes.NewCustomTime(time.Now()),
+		UpdatedAt: *octypes.NewCustomTime(time.Now()),
+	}
+	website2 := WebsiteTest{
+		UUID:      GenNewUUID(""),
+		Domain:    "test.com",
+		RealmUUID: realm2.UUID,
+		CreatedAt: *octypes.NewCustomTime(time.Now()),
+		UpdatedAt: *octypes.NewCustomTime(time.Now()),
+	}
+	website3 := WebsiteTest{
+		UUID:      GenNewUUID(""),
+		Domain:    "sample.com",
+		RealmUUID: realm1.UUID,
+		CreatedAt: *octypes.NewCustomTime(time.Now()),
+		UpdatedAt: *octypes.NewCustomTime(time.Now()),
+	}
+	insertWebsite(t, website1)
+	insertWebsite(t, website2)
+	insertWebsite(t, website3)
+
+	// Build a query with WHERE and JOIN clauses
+	qb := SelectBase("website", "").
+		Left("realm", "r", "website.realm_uuid = r.uuid").
+		Where("r.name = $1").
+		Where("website.domain LIKE $2")
+	query := qb.Build()
+	args := []interface{}{"Realm One", "%com"}
+
+	// Fetch results
+	websites := []WebsiteTest{}
+	err := Db.Select(&websites, query, args...)
+	if err != nil {
+		t.Fatalf("Failed to execute query: %v", err)
+	}
+
+	// Verify results
+	if len(websites) != 2 {
+		t.Errorf("Expected 2 websites, got %d", len(websites))
+	}
+	for _, w := range websites {
+		if w.Realm == nil {
+			t.Errorf("Expected Realm to be not nil for website %s", w.Domain)
+		} else if w.Realm.Name != "Realm One" {
+			t.Errorf("Expected Realm Name to be 'Realm One', got '%s'", w.Realm.Name)
+		}
+	}
+}
+
+// Helper functions to insert Realm and Website
+func insertRealm(t *testing.T, realm RealmTest) {
+	query, args := GetInsertQuery("realm", map[string]interface{}{
+		"uuid":       realm.UUID,
+		"name":       realm.Name,
+		"created_at": realm.CreatedAt,
+		"updated_at": realm.UpdatedAt,
+	}, "")
+	_, err := Db.Exec(query, args...)
+	if err != nil {
+		t.Fatalf("Failed to insert realm: %v", err)
+	}
+}
+
+func insertWebsite(t *testing.T, website WebsiteTest) {
+	query, args := GetInsertQuery("website", map[string]interface{}{
+		"uuid":       website.UUID,
+		"domain":     website.Domain,
+		"realm_uuid": website.RealmUUID,
+		"created_at": website.CreatedAt,
+		"updated_at": website.UpdatedAt,
+	}, "")
+	_, err := Db.Exec(query, args...)
+	if err != nil {
+		t.Fatalf("Failed to insert website: %v", err)
+	}
 }
