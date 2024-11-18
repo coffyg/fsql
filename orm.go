@@ -14,10 +14,19 @@ type Join struct {
 	OnCondition string
 }
 
+type QueryStep interface{}
+
+type WhereStep struct {
+	Condition string
+}
+
+type JoinStep struct {
+	Join
+}
+
 type QueryBuilder struct {
-	Table  string
-	Joins  []Join
-	Wheres []string
+	Table string
+	Steps []QueryStep
 }
 
 func GetInsertQuery(tableName string, valuesMap map[string]interface{}, returning string) (string, []interface{}) {
@@ -80,60 +89,94 @@ func GetUpdateQuery(tableName string, valuesMap map[string]interface{}, returnin
 
 func SelectBase(table string, alias string) *QueryBuilder {
 	return &QueryBuilder{
-		Table:  table,
-		Joins:  []Join{},
-		Wheres: []string{},
+		Table: table,
+		Steps: []QueryStep{},
 	}
 }
 
-func (qb *QueryBuilder) Left(table string, alias string, on string) *QueryBuilder {
-	qb.Joins = append(qb.Joins, Join{
-		Table:       table,
-		TableAlias:  alias,
-		JoinType:    "LEFT JOIN",
-		OnCondition: on,
-	})
+func (qb *QueryBuilder) Where(condition string) *QueryBuilder {
+	qb.Steps = append(qb.Steps, WhereStep{Condition: condition})
 	return qb
 }
 
 func (qb *QueryBuilder) Join(table string, alias string, on string) *QueryBuilder {
-	qb.Joins = append(qb.Joins, Join{
+	qb.Steps = append(qb.Steps, JoinStep{Join{
 		Table:       table,
 		TableAlias:  alias,
 		JoinType:    "JOIN",
 		OnCondition: on,
-	})
+	}})
 	return qb
 }
 
-func (qb *QueryBuilder) Where(condition string) *QueryBuilder {
-	qb.Wheres = append(qb.Wheres, condition)
+func (qb *QueryBuilder) Left(table string, alias string, on string) *QueryBuilder {
+	qb.Steps = append(qb.Steps, JoinStep{Join{
+		Table:       table,
+		TableAlias:  alias,
+		JoinType:    "LEFT JOIN",
+		OnCondition: on,
+	}})
 	return qb
 }
 
 func (qb *QueryBuilder) Build() string {
-	fieldsArray, _ := GetSelectFields(qb.Table, "")
-	fields := strings.Join(fieldsArray, ",")
+	var baseWheres []string
+	var joinsList []*Join
+	var whereConditions []string
+	var fields []string
+	hasJoins := false
 
-	for _, join := range qb.Joins {
-		fieldsArray, _ := GetSelectFields(join.Table, join.TableAlias)
-		fields += ", " + strings.Join(fieldsArray, ",")
+	// Collect fields from base table
+	baseFields, _ := GetSelectFields(qb.Table, "")
+	fields = append(fields, baseFields...)
+
+	for _, step := range qb.Steps {
+		switch s := step.(type) {
+		case WhereStep:
+			if !hasJoins {
+				baseWheres = append(baseWheres, s.Condition)
+			} else {
+				whereConditions = append(whereConditions, s.Condition)
+			}
+		case JoinStep:
+			hasJoins = true
+			// Collect fields from join table
+			joinFields, _ := GetSelectFields(s.Table, s.TableAlias)
+			fields = append(fields, joinFields...)
+			// Add join to joinsList
+			joinsList = append(joinsList, &s.Join)
+		default:
+			// Handle other steps if necessary
+		}
 	}
 
+	// Build base table
+	var baseTable string
+	if len(baseWheres) > 0 {
+		baseTable = fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", qb.Table, strings.Join(baseWheres, " AND "), qb.Table)
+	} else {
+		baseTable = qb.Table
+	}
+
+	// Build joins
 	var joins []string
-	for _, join := range qb.Joins {
+	for _, join := range joinsList {
 		table := join.Table
 		if join.TableAlias != "" {
-			table = fmt.Sprintf(`"%s" AS %s`, join.Table, join.TableAlias)
+			table = fmt.Sprintf("%s AS %s", join.Table, join.TableAlias)
 		}
-		joins = append(joins, fmt.Sprintf(` %s %s ON %s `, join.JoinType, table, join.OnCondition))
+		joins = append(joins, fmt.Sprintf("%s %s ON %s", join.JoinType, table, join.OnCondition))
 	}
 
-	query := fmt.Sprintf(`SELECT %s FROM "%s" %s`, fields, qb.Table, strings.Join(joins, " "))
+	// Build query
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(fields, ", "), baseTable)
 
-	// Include WHERE clauses if any
-	if len(qb.Wheres) > 0 {
-		query += " WHERE " + strings.Join(qb.Wheres, " AND ")
+	if len(joins) > 0 {
+		query += " " + strings.Join(joins, " ")
+	}
+
+	if len(whereConditions) > 0 {
+		query += " WHERE " + strings.Join(whereConditions, " AND ")
 	}
 
 	return query
