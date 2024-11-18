@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx" // SQL library
-	_ "github.com/lib/pq"     // PostgreSQL driver
 )
 
 var Db *sqlx.DB
@@ -20,6 +19,14 @@ func PgxCreateDB(uri string) (*sqlx.DB, error) {
 
 	pgxdb := stdlib.OpenDB(*connConfig)
 	return sqlx.NewDb(pgxdb, "pgx"), nil
+}
+
+func InitCustomDb(database string) *sqlx.DB {
+	db, err := PgxCreateDB(database)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	return db
 }
 
 func InitDB(database string) {
