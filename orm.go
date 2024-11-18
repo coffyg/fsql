@@ -94,6 +94,16 @@ func (qb *QueryBuilder) Left(table string, alias string, on string) *QueryBuilde
 	return qb
 }
 
+func (qb *QueryBuilder) Join(table string, alias string, on string) *QueryBuilder {
+	qb.Joins = append(qb.Joins, Join{
+		Table:       table,
+		TableAlias:  alias,
+		JoinType:    "JOIN",
+		OnCondition: on,
+	})
+	return qb
+}
+
 func (qb *QueryBuilder) Build() string {
 	fieldsArray, _ := GetSelectFields(qb.Table, "")
 	fields := strings.Join(fieldsArray, ",")
