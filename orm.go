@@ -164,9 +164,9 @@ func (qb *QueryBuilder) Build() string {
 	for _, join := range joinsList {
 		table := join.Table
 		if join.TableAlias != "" {
-			table = fmt.Sprintf(" %s AS %s ", join.Table, join.TableAlias)
+			table = fmt.Sprintf(`"%s" AS %s`, join.Table, join.TableAlias)
 		}
-		joins = append(joins, fmt.Sprintf(" %s %s ON %s ", join.JoinType, table, join.OnCondition))
+		joins = append(joins, fmt.Sprintf(` %s %s ON %s `, join.JoinType, table, join.OnCondition))
 	}
 
 	// Build query
