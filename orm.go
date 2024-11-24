@@ -154,7 +154,7 @@ func (qb *QueryBuilder) Build() string {
 	// Build base table without using SELECT *
 	var baseTable string
 	if len(baseWheres) > 0 {
-		baseTable = fmt.Sprintf("(SELECT %s FROM %s WHERE %s) AS %s", strings.Join(baseFields, ", "), qb.Table, strings.Join(baseWheres, " AND "), qb.Table)
+		baseTable = fmt.Sprintf(`(SELECT %s FROM "%s" WHERE %s) AS "%s"`, strings.Join(baseFields, ", "), qb.Table, strings.Join(baseWheres, " AND "), qb.Table)
 	} else {
 		baseTable = qb.Table
 	}
@@ -170,7 +170,7 @@ func (qb *QueryBuilder) Build() string {
 	}
 
 	// Build query
-	query := fmt.Sprintf("SELECT %s FROM %s ", strings.Join(fields, ", "), baseTable)
+	query := fmt.Sprintf(`SELECT %s FROM "%s" `, strings.Join(fields, ", "), baseTable)
 
 	if len(joins) > 0 {
 		query += " " + strings.Join(joins, " ")
