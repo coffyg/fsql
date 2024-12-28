@@ -101,7 +101,6 @@ func cleanDatabase() error {
 	_, err := Db.Exec(`TRUNCATE TABLE ai_model, website, realm RESTART IDENTITY CASCADE`)
 	return err
 }
-
 func TestAIModelInsertAndFetch(t *testing.T) {
 	// Clean the database before the test
 	if err := cleanDatabase(); err != nil {
@@ -325,7 +324,6 @@ func GetWebsiteByUUID(uuid string) (*WebsiteTest, error) {
 
 	return &website, nil
 }
-
 func TestQueryBuilderWhereAndJoin(t *testing.T) {
 	// Clean the database before the test
 	if err := cleanDatabase(); err != nil {

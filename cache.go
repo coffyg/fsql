@@ -64,7 +64,6 @@ func InitModelTagCache(model interface{}, tableName string) {
 		dbTagMap[field.Name] = dbTagValue
 
 		if modeFlags["s"] {
-			// 's' might be for "skip" or something else you want to ignore
 			continue
 		}
 
@@ -139,12 +138,12 @@ func getFieldsByMode(tableName, mode, aliasTableName string) ([]string, []string
 		panic("invalid mode")
 	}
 
-	quotedTableName := `"` + strings.ReplaceAll(tableName, `"`, ``) + `"`
 	for _, fieldName := range dbFields {
+		quotedTableName := `"` + strings.ReplaceAll(tableName, `"`, ``) + `"`
 		quotedFieldName := `"` + strings.ReplaceAll(fieldName, `"`, ``) + `"`
 		if aliasTableName != "" {
-			aliasClean := strings.ReplaceAll(aliasTableName, `"`, "")
-			fields = append(fields, fmt.Sprintf(`"%s".%s AS "%s.%s"`, aliasClean, quotedFieldName, aliasClean, fieldName))
+			aliasTableName = strings.ReplaceAll(aliasTableName, `"`, "")
+			fields = append(fields, `"`+aliasTableName+`".`+quotedFieldName+` AS "`+aliasTableName+`.`+fieldName+`"`)
 		} else {
 			fields = append(fields, quotedTableName+"."+quotedFieldName)
 		}

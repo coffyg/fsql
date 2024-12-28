@@ -24,22 +24,9 @@ type JoinStep struct {
 	Join
 }
 
-// NEW: Keep track of user-defined fields per alias or table
-type fieldsOverride struct {
-	aliasOrTable string
-	fields       []string
-}
-
-type FieldSelectStep struct {
-	fieldsOverride
-}
-
 type QueryBuilder struct {
 	Table string
 	Steps []QueryStep
-	// A map from "table" or "alias" -> []string of fields.
-	// If empty or missing, we call GetSelectFields as before.
-	customFields map[string][]string
 }
 
 func GetInsertQuery(tableName string, valuesMap map[string]interface{}, returning string) (string, []interface{}) {
@@ -83,21 +70,14 @@ func GetUpdateQuery(tableName string, valuesMap map[string]interface{}, returnin
 	for _, field := range fields {
 		if value, exists := valuesMap[field]; exists {
 			setClause := fmt.Sprintf(`%s = $%d`, field, counter)
+
 			setClauses = append(setClauses, setClause)
 			queryValues = append(queryValues, value)
 			counter++
 		}
 	}
 
-	query := fmt.Sprintf(`UPDATE "%s" SET %s WHERE "%s"."%s" = $%d RETURNING "%s".%s`,
-		tableName,
-		strings.Join(setClauses, ", "),
-		tableName,
-		returning,
-		counter,
-		tableName,
-		returning,
-	)
+	query := fmt.Sprintf(`UPDATE "%s" SET %s WHERE "%s"."%s" = $%d RETURNING "%s".%s`, tableName, strings.Join(setClauses, ", "), tableName, returning, counter, tableName, returning)
 	uuidValue, uuidExists := valuesMap[returning]
 	if !uuidExists {
 		panic(fmt.Sprintf("UUID not found in valuesMap: %v", valuesMap))
@@ -109,9 +89,8 @@ func GetUpdateQuery(tableName string, valuesMap map[string]interface{}, returnin
 
 func SelectBase(table string, alias string) *QueryBuilder {
 	return &QueryBuilder{
-		Table:        table,
-		Steps:        []QueryStep{},
-		customFields: make(map[string][]string),
+		Table: table,
+		Steps: []QueryStep{},
 	}
 }
 
@@ -140,24 +119,21 @@ func (qb *QueryBuilder) Left(table string, alias string, on string) *QueryBuilde
 	return qb
 }
 
-// NEW: specify custom fields for a table or an alias
-func (qb *QueryBuilder) WithFields(aliasOrTable string, fields ...string) *QueryBuilder {
-	qb.customFields[aliasOrTable] = fields
-	return qb
-}
-
 func (qb *QueryBuilder) Build() string {
 	var baseWheres []string
 	var joinsList []*Join
 	var whereConditions []string
 	var fields []string
+	var baseFields []string
 	hasJoins := false
+
+	// Collect fields from base table
+	baseFields, _ = GetSelectFields(qb.Table, "")
+	fields = append(fields, baseFields...)
 
 	for _, step := range qb.Steps {
 		switch s := step.(type) {
 		case WhereStep:
-			// We place base Wheres if no joins are used yet. Once we have a join,
-			// the logic below will place them after the FROM or subquery.
 			if !hasJoins {
 				baseWheres = append(baseWheres, s.Condition)
 			} else {
@@ -165,82 +141,46 @@ func (qb *QueryBuilder) Build() string {
 			}
 		case JoinStep:
 			hasJoins = true
+			// Collect fields from join table
+			joinFields, _ := GetSelectFields(s.Join.Table, s.Join.TableAlias)
+			fields = append(fields, joinFields...)
+			// Add join to joinsList
 			joinsList = append(joinsList, &s.Join)
 		default:
-			// no-op
+			// Handle other steps if necessary
 		}
 	}
 
-	// Decide the base table or subquery
+	// Build base table without using SELECT *
 	var baseTable string
-	var baseSelectFields []string
-	if qb.customFields[qb.Table] != nil {
-		// If user provided custom fields for the base table
-		baseSelectFields = buildQuotedFields(qb.Table, "", qb.customFields[qb.Table])
-	} else {
-		// Default to all fields from the model
-		all, _ := GetSelectFields(qb.Table, "")
-		baseSelectFields = all
-	}
-
 	if len(baseWheres) > 0 {
-		// we build a subquery for the base table if there's a where
-		subquery := fmt.Sprintf(`SELECT %s FROM "%s" WHERE %s`,
-			strings.Join(baseSelectFields, ", "),
-			qb.Table,
-			strings.Join(baseWheres, " AND "),
-		)
-		baseTable = fmt.Sprintf(`(%s) AS "%s"`, subquery, qb.Table)
+		baseTable = fmt.Sprintf(`(SELECT %s FROM "%s" WHERE %s) AS "%s"`, strings.Join(baseFields, ", "), qb.Table, strings.Join(baseWheres, " AND "), qb.Table)
 	} else {
-		baseTable = fmt.Sprintf(`"%s"`, qb.Table)
+		baseTable = qb.Table
 	}
 
-	// add base fields to the overall fields
-	fields = append(fields, baseSelectFields...)
-
-	// handle joins
+	// Build joins
+	var joins []string
 	for _, join := range joinsList {
-		var joinFields []string
-		if qb.customFields[join.TableAlias] != nil {
-			// user has custom fields for this alias
-			joinFields = buildQuotedFields(join.Table, join.TableAlias, qb.customFields[join.TableAlias])
-		} else {
-			// no custom fields, select all
-			joinFields, _ = GetSelectFields(join.Table, join.TableAlias)
-		}
-		fields = append(fields, joinFields...)
-
-		tableClause := fmt.Sprintf(`"%s"`, join.Table)
+		table := join.Table
 		if join.TableAlias != "" {
-			tableClause = fmt.Sprintf(`"%s" AS "%s"`, join.Table, join.TableAlias)
+			table = fmt.Sprintf(`"%s" AS %s`, join.Table, join.TableAlias)
 		}
-		joinPart := fmt.Sprintf(` %s %s ON %s `, join.JoinType, tableClause, join.OnCondition)
-		baseTable += joinPart
+		joins = append(joins, fmt.Sprintf(` %s %s ON %s `, join.JoinType, table, join.OnCondition))
 	}
 
-	// build the final query
-	query := fmt.Sprintf(`SELECT %s FROM %s`, strings.Join(fields, ", "), baseTable)
+	// Build query
+	query := fmt.Sprintf(`SELECT %s FROM "%s" `, strings.Join(fields, ", "), baseTable)
+
+	if len(joins) > 0 {
+		query += " " + strings.Join(joins, " ")
+	}
+
 	if len(whereConditions) > 0 {
 		query += " WHERE " + strings.Join(whereConditions, " AND ")
 	}
+
 	return query
-}
-
-// buildQuotedFields returns a slice of quoted columns, e.g. `"table"."field"` or `"alias"."field" AS "alias.field"`
-func buildQuotedFields(tableName, alias string, fields []string) []string {
-	var results []string
-	tableNameClean := strings.ReplaceAll(tableName, `"`, "")
-	aliasClean := strings.ReplaceAll(alias, `"`, "")
-
-	for _, f := range fields {
-		fieldQuoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(f, `"`, `""`))
-		if aliasClean != "" {
-			results = append(results, fmt.Sprintf(`"%s".%s AS "%s.%s"`, aliasClean, fieldQuoted, aliasClean, f))
-		} else {
-			results = append(results, fmt.Sprintf(`"%s".%s`, tableNameClean, fieldQuoted))
-		}
-	}
-	return results
 }
 
 func GenNewUUID(table string) string {
