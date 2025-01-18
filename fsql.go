@@ -31,12 +31,7 @@ func PgxCreateDBWithPool(uri string) (*sqlx.DB, error) {
 	// Wrap pgxpool.Pool as sqlx.DB using stdlib
 	return sqlx.NewDb(stdlib.OpenDBFromPool(pool), "pgx"), nil
 }
-func SetClientEncoding(db *sqlx.DB) {
-	_, err := db.Exec("SET client_encoding = 'UTF8'")
-	if err != nil {
-		log.Printf("Failed to set client encoding: %v", err)
-	}
-}
+
 func PgxCreateDB(uri string) (*sqlx.DB, error) {
 	connConfig, _ := pgx.ParseConfig(uri)
 
@@ -50,7 +45,6 @@ func InitDBPool(database string) {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	SetClientEncoding(Db)
 }
 
 func InitCustomDb(database string) *sqlx.DB {
@@ -58,7 +52,6 @@ func InitCustomDb(database string) *sqlx.DB {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	SetClientEncoding(db)
 	return db
 }
 
@@ -68,7 +61,6 @@ func InitDB(database string) {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	SetClientEncoding(Db)
 }
 func CloseDB() {
 	if Db != nil {
@@ -84,7 +76,6 @@ func InitDbReplicas(databases []string) {
 			log.Printf("Failed to connect to replica database %s: %v", dbURI, err)
 			continue
 		}
-		SetClientEncoding(replicaDb)
 		readReplicasDbs = append(readReplicasDbs, replicaDb)
 	}
 }
