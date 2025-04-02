@@ -147,6 +147,32 @@ func BuildFilterCount(baseQuery string) string {
 	return countQuery
 }
 
+func GetSortCondition(sort *Sort, table string) (string, error) {
+	if sort == nil || len(*sort) == 0 {
+		return "", nil
+	}
+
+	sortClauses := []string{}
+	modelInfo, _ := getModelInfo(table)
+
+	for field, order := range *sort {
+		order = strings.ToUpper(order)
+		if order != "ASC" && order != "DESC" {
+			return "", fmt.Errorf("invalid sort order: %s", order)
+		}
+		dbField, exists := modelInfo.dbTagMap[field]
+		if exists {
+			sortClauses = append(sortClauses, fmt.Sprintf(`"%s".%s %s`, table, dbField, order))
+		}
+	}
+
+	if len(sortClauses) > 0 {
+		return " ORDER BY " + strings.Join(sortClauses, ", "), nil
+	}
+
+	return "", nil
+}
+
 func GetFilterCount(query string, args []interface{}) (int, error) {
 	var count int
 	err := Db.QueryRow(query, args...).Scan(&count)
