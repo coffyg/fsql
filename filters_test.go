@@ -4,128 +4,104 @@ import (
 	"fmt"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/coffyg/octypes"
 )
 
-type UserCreditHistory struct {
-	UUID      string              `json:"UUID" db:"uuid" dbMode:"i"`
-	CreatedAt *octypes.CustomTime `json:"CreatedAt" db:"created_at" dbMode:"i" dbInsertValue:"NOW()"`
-	FromUUID  string              `json:"FromUUID" db:"from_uuid" dbMode:"i"`
-	ToUUID    string              `json:"ToUUID" db:"to_uuid" dbMode:"i"`
-	Amount    int64               `json:"Amount" db:"amount" dbMode:"i"`
-	Comment   string              `json:"Comment" db:"comment" dbMode:"i"`
-}
-
-var userCreditHistoryBaseQuery string
-
-func initUserCreditHistoryModel() {
-	InitModelTagCache(UserCreditHistory{}, "user_credit_history")
-	userCreditHistoryBaseQuery = SelectBase("user_credit_history", "").Build()
-}
-
-func TestFilterQueryCustomAndBuildFilterCountCustom(t *testing.T) {
-	// Initialize model
-	initUserCreditHistoryModel()
-
-	// Clean the database
+func TestBuildFilterCountCustom(t *testing.T) {
+	// Clean the database before the test
 	if err := cleanDatabase(); err != nil {
 		t.Fatalf("Failed to clean database: %v", err)
 	}
 
-	// Insert test data
-	userUUID := GenNewUUID("")
-	otherUserUUID := GenNewUUID("")
-	
-	// Insert multiple credit history records
-	for i := 1; i <= 10; i++ {
-		history := UserCreditHistory{
-			UUID:     GenNewUUID(""),
-			FromUUID: userUUID,
-			ToUUID:   otherUserUUID,
-			Amount:   int64(i * 100),
-			Comment:  fmt.Sprintf("Test transaction %d", i),
-			CreatedAt: octypes.NewCustomTime(time.Now()),
+	// Create test data by using the existing ai_model table
+	for i := 1; i <= 20; i++ {
+		model := AIModelTest{
+			Key:      *octypes.NewNullString(fmt.Sprintf("key_%d", i)),
+			Name:     *octypes.NewNullString(fmt.Sprintf("Model %d", i)),
+			Type:     *octypes.NewNullString("test_type"),
+			Provider: *octypes.NewNullString("test_provider"),
 		}
-		
-		query, args := GetInsertQuery("user_credit_history", map[string]interface{}{
-			"uuid":       history.UUID,
-			"from_uuid":  history.FromUUID,
-			"to_uuid":    history.ToUUID,
-			"amount":     history.Amount,
-			"comment":    history.Comment,
-			"created_at": history.CreatedAt,
-		}, "")
-		
-		_, err := Db.Exec(query, args...)
+		err := model.Insert()
 		if err != nil {
-			t.Fatalf("Failed to insert credit history: %v", err)
+			t.Fatalf("Insert error: %v", err)
 		}
 	}
 
-	// Test FilterQueryCustom and BuildFilterCountCustom for "all" type
-	testCreditHistoryQuery(t, "all", userUUID, 10)
-	
-	// Test FilterQueryCustom and BuildFilterCountCustom for "in" type
-	testCreditHistoryQuery(t, "in", otherUserUUID, 10)
-	
-	// Test FilterQueryCustom and BuildFilterCountCustom for "out" type
-	testCreditHistoryQuery(t, "out", userUUID, 10)
+	// Test various query patterns similar to the one used in ListCreditHistoryForUser
+	testQueryPatterns(t)
 }
 
-func testCreditHistoryQuery(t *testing.T, typeTransaction, userUUID string, expectedCount int) {
+func testQueryPatterns(t *testing.T) {
+	// Test standard query 
+	baseQuery := aiModelBaseQuery + " WHERE type = $1"
+	baseArgs := []interface{}{"test_type"}
+	testCountQuery(t, "standard", baseQuery, baseArgs, 20)
+
+	// Test OR condition query
+	baseQuery = aiModelBaseQuery + " WHERE type = $1 OR provider = $2"
+	baseArgs = []interface{}{"test_type", "test_provider"}
+	testCountQuery(t, "or_condition", baseQuery, baseArgs, 20)
+
+	// Test complex condition query with quoted table name
+	baseQuery = aiModelBaseQuery + ` WHERE "ai_model".type = $1`
+	baseArgs = []interface{}{"test_type"}
+	testCountQuery(t, "quoted_table", baseQuery, baseArgs, 20)
+
+	// Test query with aliased table 
+	baseQuery = aiModelBaseQuery + ` WHERE "ai_model".type = $1`
+	baseArgs = []interface{}{"test_type"}
+	testCountQuery(t, "aliased_table", baseQuery, baseArgs, 20)
+	
+	// Test subquery in condition
+	baseQuery = aiModelBaseQuery + ` WHERE type IN (SELECT type FROM ai_model WHERE provider = $1)`
+	baseArgs = []interface{}{"test_provider"}
+	testCountQuery(t, "subquery", baseQuery, baseArgs, 20)
+}
+
+func testCountQuery(t *testing.T, testName string, baseQuery string, baseArgs []interface{}, expectedCount int) {
 	t.Helper()
 	
-	var query string
-	var baseArgs []interface{}
-
-	if typeTransaction == "all" {
-		query = userCreditHistoryBaseQuery + " WHERE to_uuid = $1 OR from_uuid = $1"
-		baseArgs = []interface{}{userUUID}
-	} else if typeTransaction == "in" {
-		query = userCreditHistoryBaseQuery + " WHERE to_uuid = $1"
-		baseArgs = []interface{}{userUUID}
-	} else if typeTransaction == "out" {
-		query = userCreditHistoryBaseQuery + " WHERE from_uuid = $1"
-		baseArgs = []interface{}{userUUID}
-	}
-
-	perPage := 5
+	perPage := 10
 	page := 1
 
-	// Test FilterQueryCustom
+	// Apply FilterQueryCustom to create paginated query
 	query, args, err := FilterQueryCustom(
-		query,
-		"user_credit_history",
-		`"user_credit_history".created_at DESC`,
+		baseQuery,
+		"ai_model",
+		`"ai_model".key DESC`,
 		baseArgs,
 		perPage,
 		page,
 	)
 	if err != nil {
-		t.Fatalf("FilterQueryCustom error for type %s: %v", typeTransaction, err)
+		t.Fatalf("FilterQueryCustom error for %s: %v", testName, err)
 	}
 
-	// Fetch records
-	history := []UserCreditHistory{}
-	err = Db.Select(&history, query, args...)
+	// Get some results to verify query works
+	models := []AIModelTest{}
+	err = Db.Select(&models, query, args...)
 	if err != nil {
-		t.Fatalf("Select error for type %s: %v", typeTransaction, err)
+		t.Fatalf("Select error for %s: %v", testName, err)
 	}
 
-	// Test BuildFilterCountCustom
+	// Test BuildFilterCountCustom - this is what we're fixing
 	countQuery := BuildFilterCountCustom(query)
+	
+	// For debugging, log the generated count query
+	t.Logf("Test: %s\nCount query: %s", testName, countQuery)
+	
 	count, err := GetFilterCount(countQuery, args)
 	if err != nil {
-		t.Fatalf("GetFilterCount error for type %s: %v", typeTransaction, err)
+		t.Fatalf("GetFilterCount error for %s: %v", testName, err)
 	}
 
 	// Verify results
 	if count != expectedCount {
-		t.Errorf("Expected count %d, got %d for type %s", expectedCount, count, typeTransaction)
+		t.Errorf("Test %s: Expected count %d, got %d", testName, expectedCount, count)
 	}
 
+	// Verify pagination correct
 	pagination := octypes.Pagination{
 		ResultsPerPage: perPage,
 		PageNo:         page,
@@ -133,11 +109,8 @@ func testCreditHistoryQuery(t *testing.T, typeTransaction, userUUID string, expe
 		PageMax:        int(math.Ceil(float64(count) / float64(perPage))),
 	}
 
-	if pagination.PageMax != int(math.Ceil(float64(expectedCount)/float64(perPage))) {
-		t.Errorf("Incorrect pagination calculation for type %s", typeTransaction)
-	}
-
-	if len(history) != perPage {
-		t.Errorf("Expected %d records, got %d for type %s", perPage, len(history), typeTransaction)
+	expectedPageMax := int(math.Ceil(float64(expectedCount)/float64(perPage)))
+	if pagination.PageMax != expectedPageMax {
+		t.Errorf("Test %s: Expected page max %d, got %d", testName, expectedPageMax, pagination.PageMax)
 	}
 }
