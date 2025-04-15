@@ -461,48 +461,32 @@ func FilterQueryCustom(baseQuery string, t string, orderBy string, args []interf
 
 // BuildFilterCountCustom creates a count query from a custom base query
 func BuildFilterCountCustom(baseQuery string) string {
-	fromIndex := strings.IndexByte(strings.ToUpper(baseQuery), 'F')
-	if fromIndex < 0 {
-		// If we can't find FROM, return a safe fallback
-		return "SELECT COUNT(*) FROM (" + baseQuery + ") AS count_subquery"
-	}
-	
-	// Find the complete FROM token
-	fromPos := indexCaseInsensitive(baseQuery[fromIndex:], "FROM")
-	if fromPos < 0 {
-		// If we can't find complete FROM, return a safe fallback
-		return "SELECT COUNT(*) FROM (" + baseQuery + ") AS count_subquery"
-	}
-	
-	fromPos += fromIndex // Adjust position to full string
-	
-	// Extract the part after FROM
-	query := baseQuery[fromPos+4:] // 4 is the length of "FROM"
-	
-	// Remove LIMIT and ORDER BY clauses efficiently
-	limitPos := indexCaseInsensitive(query, "LIMIT")
-	if limitPos > 0 {
-		query = query[:limitPos]
-	}
-	
-	orderPos := indexCaseInsensitive(query, "ORDER BY")
-	if orderPos > 0 {
-		query = query[:orderPos]
-	}
-	
-	// Trim extra whitespace and commas
-	query = strings.TrimSpace(query)
-	if strings.HasSuffix(query, ",") {
-		query = query[:len(query)-1]
-	}
-	
-	// Build the final count query
+	// For safety, just wrap the query in a subquery count
+	// This avoids parsing issues with complex queries
 	sb := countQueryBuilderPool.Get().(*strings.Builder)
 	defer countQueryBuilderPool.Put(sb)
 	
 	sb.Reset()
-	sb.WriteString("SELECT COUNT(*) FROM ")
-	sb.WriteString(query)
+	sb.WriteString(selectCountPrefix)
 	
+	// Remove LIMIT, OFFSET, and ORDER BY clauses
+	limitIndex := indexCaseInsensitive(baseQuery, " LIMIT ")
+	if limitIndex > 0 {
+		sb.WriteString(baseQuery[:limitIndex])
+	} else {
+		offsetIndex := indexCaseInsensitive(baseQuery, " OFFSET ")
+		if offsetIndex > 0 {
+			sb.WriteString(baseQuery[:offsetIndex])
+		} else {
+			orderByIndex := indexCaseInsensitive(baseQuery, " ORDER BY ")
+			if orderByIndex > 0 {
+				sb.WriteString(baseQuery[:orderByIndex])
+			} else {
+				sb.WriteString(baseQuery)
+			}
+		}
+	}
+	
+	sb.WriteString(selectCountSuffix)
 	return sb.String()
 }
