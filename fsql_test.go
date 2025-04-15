@@ -53,7 +53,7 @@ func TestMain(m *testing.M) {
 	dbPassword := flag.String("dbpass", "test_password", "Database password")
 	dbName := flag.String("dbname", "test_db", "Database name")
 	dbHost := flag.String("dbhost", "localhost", "Database host")
-	dbPort := flag.String("dbport", "5432", "Database port")
+	dbPort := flag.String("dbport", "5433", "Database port")
 
 	// Parse flags
 	flag.Parse()
