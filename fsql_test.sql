@@ -36,12 +36,3 @@ CREATE TABLE website (
     realm_uuid UUID REFERENCES realm(uuid)
 );
 
--- Add user_credit_history table for testing buildFilterCountCustom
-CREATE TABLE user_credit_history (
-    uuid UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    from_uuid TEXT NOT NULL,
-    to_uuid TEXT NOT NULL,
-    amount BIGINT NOT NULL,
-    comment TEXT NOT NULL
-);
