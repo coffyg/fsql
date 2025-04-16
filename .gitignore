@@ -61,3 +61,6 @@ glide.lock
 tags
 *.txt
 *.md
+compare_bench.sh
+quick_compare.sh
+simple_bench.sh
