@@ -56,23 +56,23 @@ type DBConfig struct {
 
 // Global database connections
 var (
-	Db             *sqlx.DB
-	mainPool       *pgxpool.Pool // Keep reference to actual pool for accurate stats
+	Db              *sqlx.DB
+	mainPool        *pgxpool.Pool // Keep reference to actual pool for accurate stats
 	readReplicasDbs []*DBConnection
 	healthCheckStop chan struct{}
 	replicaMutex    sync.RWMutex
-	
+
 	// Global logger for fsql operations
 	logger *zerolog.Logger
-	
-	// Default configuration
+
+	// Default configuration - reasonable production defaults
 	DefaultConfig = DBConfig{
-		MaxConnections:  defaultMaxConnections,
-		MinConnections:  defaultMinConnections,
-		MaxConnLifetime: defaultMaxConnLifetime,
-		MaxConnIdleTime: defaultMaxConnIdleTime,
-		HealthCheck:     true,
-		DefaultTimeout:  30 * time.Second,
+		MaxConnections:  50,  // Reasonable default instead of crazy 1200
+		MinConnections:  5,
+		MaxConnLifetime: 5 * time.Minute,
+		MaxConnIdleTime: 5 * time.Minute, 
+		HealthCheck:     false,
+		DefaultTimeout:  3 * time.Second,  // Reasonable timeout for complex queries
 	}
 )
 
@@ -81,29 +81,21 @@ func SetLogger(l *zerolog.Logger) {
 	logger = l
 }
 
-// getEffectiveTimeout returns the timeout to use, preferring config over default
-func getEffectiveTimeout(config ...DBConfig) time.Duration {
-	if len(config) > 0 && config[0].DefaultTimeout > 0 {
-		return config[0].DefaultTimeout
-	}
-	return DefaultDBTimeout
-}
-
 // logQueryTimeout logs when a database query times out
 func logQueryTimeout(operation, query string, timeout time.Duration, poolStats ...interface{}) {
 	if logger == nil {
 		return
 	}
-	
+
 	// Extract table name from query for better logging
 	tableName := extractTableName(query)
-	
+
 	event := logger.Warn().
 		Str("operation", operation).
 		Str("table", tableName).
 		Dur("timeout", timeout).
 		Str("query", query)
-	
+
 	// Add pool stats if available
 	if len(poolStats) >= 5 {
 		if openConns, ok := poolStats[0].(int32); ok {
@@ -116,14 +108,14 @@ func logQueryTimeout(operation, query string, timeout time.Duration, poolStats .
 			event = event.Int32("pool_idle", idle)
 		}
 	}
-	
+
 	event.Msg("Database query timed out")
 }
 
 // extractTableName attempts to extract table name from SQL query
 func extractTableName(query string) string {
 	query = strings.ToUpper(strings.TrimSpace(query))
-	
+
 	// Handle INSERT statements
 	if strings.HasPrefix(query, "INSERT INTO") {
 		parts := strings.Fields(query)
@@ -131,15 +123,15 @@ func extractTableName(query string) string {
 			return strings.Trim(parts[2], "\"`)") // Remove quotes/backticks
 		}
 	}
-	
+
 	// Handle UPDATE statements
 	if strings.HasPrefix(query, "UPDATE") {
 		parts := strings.Fields(query)
 		if len(parts) >= 2 {
-			return strings.Trim(parts[1], "\"`)") 
+			return strings.Trim(parts[1], "\"`)")
 		}
 	}
-	
+
 	// Handle SELECT statements with FROM
 	if strings.Contains(query, "FROM ") {
 		fromIndex := strings.Index(query, "FROM ")
@@ -147,31 +139,20 @@ func extractTableName(query string) string {
 			afterFrom := query[fromIndex+5:]
 			parts := strings.Fields(afterFrom)
 			if len(parts) >= 1 {
-				return strings.Trim(parts[0], "\"`)") 
+				return strings.Trim(parts[0], "\"`)")
 			}
 		}
 	}
-	
+
 	// Handle DELETE statements
 	if strings.HasPrefix(query, "DELETE FROM") {
 		parts := strings.Fields(query)
 		if len(parts) >= 3 {
-			return strings.Trim(parts[2], "\"`)") 
+			return strings.Trim(parts[2], "\"`)")
 		}
 	}
-	
-	return "unknown"
-}
 
-// truncateQuery truncates a query string for logging
-func truncateQuery(query string, maxLen int) string {
-	query = strings.ReplaceAll(query, "\n", " ")
-	query = strings.ReplaceAll(query, "\t", " ")
-	
-	if len(query) <= maxLen {
-		return query
-	}
-	return query[:maxLen] + "..."
+	return "unknown"
 }
 
 // PgxCreateDBWithPool creates a connection pool with custom configuration
@@ -181,13 +162,13 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Apply custom configuration
 	poolConfig.MaxConns = int32(config.MaxConnections)
 	poolConfig.MinConns = int32(config.MinConnections)
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
-	
+
 	// Create the connection pool
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
@@ -199,17 +180,23 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 
 	// Wrap pgxpool.Pool as sqlx.DB using stdlib
 	db := sqlx.NewDb(stdlib.OpenDBFromPool(pool), "pgx")
-	
+
 	// Disable database/sql connection pooling since pgxpool handles it
-	db.SetMaxOpenConns(0)  // 0 = unlimited, let pgxpool manage
-	db.SetMaxIdleConns(-1) // -1 = no limit, let pgxpool manage
+	db.SetMaxOpenConns(0)    // 0 = unlimited, let pgxpool manage
+	db.SetMaxIdleConns(-1)   // -1 = no limit, let pgxpool manage
 	db.SetConnMaxLifetime(0) // 0 = no limit, let pgxpool manage
-	
+
 	return db, nil
 }
 
 // PgxCreateDB creates a simple connection without pooling
 func PgxCreateDB(uri string, config ...DBConfig) (*sqlx.DB, error) {
+	// Get effective configuration
+	cfg := DefaultConfig
+	if len(config) > 0 {
+		cfg = config[0]
+	}
+
 	connConfig, err := pgx.ParseConfig(uri)
 	if err != nil {
 		return nil, err
@@ -217,12 +204,12 @@ func PgxCreateDB(uri string, config ...DBConfig) (*sqlx.DB, error) {
 
 	pgxdb := stdlib.OpenDB(*connConfig)
 	db := sqlx.NewDb(pgxdb, "pgx")
-	
-	// Use default pgx connection management without database/sql interference
-	db.SetMaxOpenConns(0)  // 0 = unlimited, let pgx manage
-	db.SetMaxIdleConns(-1) // -1 = no limit, let pgx manage  
-	db.SetConnMaxLifetime(0) // 0 = no limit, let pgx manage
-	
+
+	// Apply configuration to connection limits
+	db.SetMaxOpenConns(cfg.MaxConnections)
+	db.SetMaxIdleConns(cfg.MinConnections)
+	db.SetConnMaxLifetime(cfg.MaxConnLifetime)
+
 	return db, nil
 }
 
@@ -233,7 +220,10 @@ func InitDBPool(database string, config ...DBConfig) {
 	if len(config) > 0 {
 		cfg = config[0]
 	}
-	
+
+	// Update global timeout to match config
+	DefaultDBTimeout = cfg.DefaultTimeout
+
 	Db, err = PgxCreateDBWithPool(database, cfg)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -252,11 +242,13 @@ func InitCustomDb(database string) *sqlx.DB {
 // InitDB initializes the main database connection without pooling
 func InitDB(database string) {
 	var err error
-	Db, err = PgxCreateDB(database)
+	// Use default config and update global timeout
+	DefaultDBTimeout = DefaultConfig.DefaultTimeout
+	Db, err = PgxCreateDB(database, DefaultConfig)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	
+
 	// Initialize prepared statement cache
 	InitPreparedCache(100, 30*time.Minute)
 }
@@ -265,10 +257,10 @@ func InitDB(database string) {
 func CloseDB() {
 	// Stop health check if running
 	stopHealthCheck()
-	
+
 	// Clear prepared statement cache
 	ClearPreparedCache()
-	
+
 	if Db != nil {
 		if err := Db.Close(); err != nil {
 			log.Printf("Error closing database: %v", err)
@@ -282,31 +274,31 @@ func InitDbReplicas(databases []string, config ...DBConfig) {
 	if len(config) > 0 {
 		cfg = config[0]
 	}
-	
+
 	// Lock for writing to replicas
 	replicaMutex.Lock()
 	defer replicaMutex.Unlock()
-	
+
 	// Initialize slice with capacity
 	readReplicasDbs = make([]*DBConnection, 0, len(databases))
-	
+
 	// Create connections for each replica
 	for _, dbURI := range databases {
 		var replicaDb *sqlx.DB
 		var err error
-		
+
 		// Create replica with pool if configured
 		if cfg.MaxConnections > 0 {
 			replicaDb, err = PgxCreateDBWithPool(dbURI, cfg)
 		} else {
 			replicaDb, err = PgxCreateDB(dbURI)
 		}
-		
+
 		if err != nil {
 			log.Printf("Failed to connect to replica database %s: %v", dbURI, err)
 			continue
 		}
-		
+
 		// Add to replicas list
 		readReplicasDbs = append(readReplicasDbs, &DBConnection{
 			DB:           replicaDb,
@@ -315,7 +307,7 @@ func InitDbReplicas(databases []string, config ...DBConfig) {
 			State:        connStateHealthy,
 		})
 	}
-	
+
 	// Start health check if enabled and there are replicas
 	if cfg.HealthCheck && len(readReplicasDbs) > 0 {
 		startHealthCheck()
@@ -326,11 +318,11 @@ func InitDbReplicas(databases []string, config ...DBConfig) {
 func GetReplika() *sqlx.DB {
 	replicaMutex.RLock()
 	defer replicaMutex.RUnlock()
-	
+
 	if len(readReplicasDbs) == 0 {
 		return Db
 	}
-	
+
 	// Count healthy replicas
 	var healthyReplicas []*DBConnection
 	for _, replica := range readReplicasDbs {
@@ -338,12 +330,12 @@ func GetReplika() *sqlx.DB {
 			healthyReplicas = append(healthyReplicas, replica)
 		}
 	}
-	
+
 	// If no healthy replicas, return primary
 	if len(healthyReplicas) == 0 {
 		return Db
 	}
-	
+
 	// Select a random healthy replica
 	idx := rand.Intn(len(healthyReplicas))
 	return healthyReplicas[idx].DB
@@ -353,10 +345,10 @@ func GetReplika() *sqlx.DB {
 func CloseReplicas() {
 	// Stop health check if running
 	stopHealthCheck()
-	
+
 	replicaMutex.Lock()
 	defer replicaMutex.Unlock()
-	
+
 	for _, conn := range readReplicasDbs {
 		if conn.DB != nil {
 			if err := conn.DB.Close(); err != nil {
@@ -364,7 +356,7 @@ func CloseReplicas() {
 			}
 		}
 	}
-	
+
 	// Clear replicas list
 	readReplicasDbs = nil
 }
@@ -373,15 +365,15 @@ func CloseReplicas() {
 func startHealthCheck() {
 	// If already running, stop it first
 	stopHealthCheck()
-	
+
 	// Create stop channel
 	healthCheckStop = make(chan struct{})
-	
+
 	// Start health check goroutine
 	go func() {
 		ticker := time.NewTicker(defaultHealthCheckInterval)
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-ticker.C:
@@ -407,38 +399,38 @@ func checkReplicasHealth() {
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), defaultHealthCheckTimeout)
 	defer cancel()
-	
+
 	// Create wait group for parallel health checks
 	var wg sync.WaitGroup
-	
+
 	// Lock for reading replicas
 	replicaMutex.RLock()
 	replicas := readReplicasDbs // Copy to avoid holding lock
 	replicaMutex.RUnlock()
-	
+
 	for _, replica := range replicas {
 		wg.Add(1)
-		
+
 		// Run health check in goroutine
 		go func(conn *DBConnection) {
 			defer wg.Done()
-			
+
 			// Get current state
 			currentState := atomic.LoadInt32(&conn.State)
-			
+
 			// Check connection health
 			err := conn.DB.PingContext(ctx)
-			
+
 			if err != nil {
 				// Increment failure count
 				failCount := atomic.AddInt32(&conn.FailureCount, 1)
-				
+
 				// If connection is healthy, mark it as unhealthy after first failure
 				if currentState == connStateHealthy && failCount >= 1 {
 					atomic.StoreInt32(&conn.State, connStateUnhealthy)
 					log.Printf("Replica %s is unhealthy: %v", conn.URI, err)
 				}
-				
+
 				// If connection is recovering, reset to unhealthy if it fails again
 				if currentState == connStateRecovering {
 					atomic.StoreInt32(&conn.State, connStateUnhealthy)
@@ -446,20 +438,20 @@ func checkReplicasHealth() {
 				}
 			} else {
 				// Connection is healthy
-				
+
 				// If connection was unhealthy, mark it as recovering
 				if currentState == connStateUnhealthy {
 					atomic.StoreInt32(&conn.State, connStateRecovering)
 					log.Printf("Replica %s is recovering", conn.URI)
 				}
-				
+
 				// If connection was recovering, mark it as healthy after success
 				if currentState == connStateRecovering {
 					atomic.StoreInt32(&conn.State, connStateHealthy)
 					atomic.StoreInt32(&conn.FailureCount, 0)
 					log.Printf("Replica %s is now healthy", conn.URI)
 				}
-				
+
 				// Reset failure count for healthy connections
 				if currentState == connStateHealthy {
 					atomic.StoreInt32(&conn.FailureCount, 0)
@@ -467,7 +459,7 @@ func checkReplicasHealth() {
 			}
 		}(replica)
 	}
-	
+
 	// Wait for all health checks to complete
 	wg.Wait()
 }
@@ -477,11 +469,11 @@ func IsConnectionHealthy(db *sqlx.DB) bool {
 	if db == nil {
 		return false
 	}
-	
+
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), defaultHealthCheckTimeout)
 	defer cancel()
-	
+
 	// Ping the database
 	err := db.PingContext(ctx)
 	return err == nil
@@ -491,7 +483,7 @@ func IsConnectionHealthy(db *sqlx.DB) bool {
 func ExecuteWithRetry(query string, args ...interface{}) error {
 	maxRetries := 3
 	var lastErr error
-	
+
 	for i := 0; i < maxRetries; i++ {
 		_, err := Db.Exec(query, args...)
 		if err != nil {
@@ -502,7 +494,7 @@ func ExecuteWithRetry(query string, args ...interface{}) error {
 		}
 		return nil
 	}
-	
+
 	if lastErr != nil {
 		return errors.New("max retries exceeded: " + lastErr.Error())
 	}
@@ -528,36 +520,36 @@ func SafeExec(query string, args ...interface{}) (sql.Result, error) {
 			Msg("Using Safe wrapper with automatic timeout - consider migrating to context-aware calls")
 		dbTimeoutWarningLogged = true
 	}
-	
+
 	timeout := DefaultDBTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	result, err := Db.ExecContext(ctx, query, args...)
-	
+
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	return result, err
 }
 
-// SafeQuery wraps Db.Query with automatic timeout  
+// SafeQuery wraps Db.Query with automatic timeout
 func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
 	timeout := DefaultDBTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	rows, err := Db.QueryContext(ctx, query, args...)
-	
+
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeQuery", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	return rows, err
 }
 
@@ -566,15 +558,15 @@ func SafeGet(dest interface{}, query string, args ...interface{}) error {
 	timeout := DefaultDBTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	err := Db.GetContext(ctx, dest, query, args...)
-	
+
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeGet", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	return err
 }
 
@@ -583,15 +575,15 @@ func SafeSelect(dest interface{}, query string, args ...interface{}) error {
 	timeout := DefaultDBTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	err := Db.SelectContext(ctx, dest, query, args...)
-	
+
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeSelect", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	return err
 }
 
@@ -600,7 +592,7 @@ func SafeQueryRow(query string, args ...interface{}) *sql.Row {
 	timeout := DefaultDBTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	// Note: QueryRowContext doesn't return error immediately, so we can't log timeout here
 	// The timeout will be detected when Scan() is called on the returned Row
 	return Db.QueryRowContext(ctx, query, args...)
@@ -611,15 +603,15 @@ func SafeNamedExec(query string, arg interface{}) (sql.Result, error) {
 	timeout := DefaultDBTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	result, err := Db.NamedExecContext(ctx, query, arg)
-	
+
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeNamedExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	return result, err
 }
 
@@ -628,15 +620,15 @@ func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
 	timeout := DefaultDBTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	rows, err := Db.NamedQueryContext(ctx, query, arg)
-	
+
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeNamedQuery", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	return rows, err
 }
 
@@ -658,12 +650,12 @@ func GetPoolStats() (openConns, inUse, idle int32, waitCount int64, waitDuration
 	if mainPool != nil {
 		// Get accurate stats from pgxpool
 		stats := mainPool.Stat()
-		return stats.TotalConns(), stats.AcquiredConns(), stats.IdleConns(), 
-		       stats.EmptyAcquireCount(), stats.EmptyAcquireWaitTime()
+		return stats.TotalConns(), stats.AcquiredConns(), stats.IdleConns(),
+			stats.EmptyAcquireCount(), stats.EmptyAcquireWaitTime()
 	} else {
 		// Fall back to database/sql stats (less accurate with our setup)
 		sqlStats := Db.Stats()
 		return int32(sqlStats.OpenConnections), int32(sqlStats.InUse), int32(sqlStats.Idle),
-		       sqlStats.WaitCount, sqlStats.WaitDuration
+			sqlStats.WaitCount, sqlStats.WaitDuration
 	}
 }
