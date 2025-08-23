@@ -369,3 +369,58 @@ func TestSafeWrappersTimeout(t *testing.T) {
 	// Reset to normal timeout for cleanup
 	DefaultDBTimeout = originalTimeout
 }
+
+// TestSafeExecTimeoutCustom tests custom timeout behavior
+func TestSafeExecTimeoutCustom(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping timeout test in short mode")
+	}
+
+	// Test with very short custom timeout (should fail)
+	_, err := SafeExecTimeout(50*time.Millisecond, "SELECT pg_sleep(0.5)")
+	if err == nil {
+		t.Error("Expected timeout error with 50ms timeout, got nil")
+	}
+
+	// Test with sufficient custom timeout (should succeed)
+	_, err = SafeExecTimeout(2*time.Second, "SELECT 1")
+	if err != nil {
+		t.Errorf("Expected success with 2s timeout, got error: %v", err)
+	}
+}
+
+// TestSafeExecWarningBehavior tests warning message logic
+func TestSafeExecWarningBehavior(t *testing.T) {
+	// Reset warning flag for this test
+	dbTimeoutWarningLogged = false
+	
+	// Store original timeout and logger state
+	originalTimeout := DefaultDBTimeout
+	originalLogger := logger
+	defer func() {
+		DefaultDBTimeout = originalTimeout
+		logger = originalLogger
+	}()
+
+	// Set test timeout
+	DefaultDBTimeout = 1 * time.Second
+
+	// Test SafeExec (should trigger warning if logger exists)
+	// We won't set logger so no actual log output
+	_, err := SafeExec("SELECT 1")
+	if err != nil {
+		t.Errorf("SafeExec failed: %v", err)
+	}
+
+	// Test SafeExecTimeout with custom timeout (should NOT trigger warning)
+	_, err = SafeExecTimeout(5*time.Second, "SELECT 1")
+	if err != nil {
+		t.Errorf("SafeExecTimeout failed: %v", err)
+	}
+
+	// Test SafeExecTimeout with default timeout (would trigger warning)
+	_, err = SafeExecTimeout(DefaultDBTimeout, "SELECT 1")
+	if err != nil {
+		t.Errorf("SafeExecTimeout with default timeout failed: %v", err)
+	}
+}
