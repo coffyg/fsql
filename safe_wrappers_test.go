@@ -660,3 +660,74 @@ func TestSafeExecTimeoutActualBehavior(t *testing.T) {
 		t.Errorf("3s timeout duration incorrect: expected ~3s, got %v", duration)
 	}
 }
+
+// TestSafeExecTimeoutSoulkynBug reproduces the exact Soulkyn bug scenario
+func TestSafeExecTimeoutSoulkynBug(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Soulkyn bug reproduction test in short mode")
+	}
+
+	// Clean database first
+	if err := cleanDatabase(); err != nil {
+		t.Fatalf("Failed to clean database: %v", err)
+	}
+
+	// Insert test data to update (like personas)
+	uuid := GenNewUUID("")
+	_, err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) VALUES ($1, $2, $3, $4, $5)`,
+		uuid, "test_key", "Test Model", "test_type", "test_provider")
+	if err != nil {
+		t.Fatalf("Failed to setup test data: %v", err)
+	}
+
+	// Reset warning flag
+	dbTimeoutWarningLogged = false
+
+	// REPRODUCE SOULKYN BUG: 120s timeout with query that should complete in 1s
+	start := time.Now()
+	_, err = SafeExecTimeout(120*time.Second, 
+		"UPDATE ai_model SET name = name || pg_sleep(1) WHERE uuid = $1", uuid)
+	duration := time.Since(start)
+
+	// This should SUCCEED in ~1 second, not fail in 2-3 seconds
+	if err != nil {
+		t.Errorf("SOULKYN BUG REPRODUCED: UPDATE with 120s timeout failed in %v with error: %v", duration, err)
+		t.Errorf("Expected success in ~1s, got failure in %v", duration)
+		return
+	}
+
+	// Should complete in ~1 second
+	if duration < 800*time.Millisecond || duration > 2*time.Second {
+		t.Errorf("UPDATE with pg_sleep(1) took unexpected time: expected ~1s, got %v", duration)
+	} else {
+		t.Logf("SUCCESS: UPDATE with 120s timeout completed normally in %v", duration)
+	}
+
+	// Also test the problematic query pattern from Soulkyn
+	uuids := []string{uuid}
+	start = time.Now()
+	_, err = SafeExecTimeout(120*time.Second,
+		"UPDATE ai_model SET name = name || pg_sleep(1) WHERE uuid = ANY($1::uuid[])", uuids)
+	duration = time.Since(start)
+
+	if err != nil {
+		t.Errorf("SOULKYN EXACT PATTERN REPRODUCED: ANY() update failed in %v with error: %v", duration, err)
+		t.Errorf("This is the exact query pattern that fails in Soulkyn")
+	} else {
+		t.Logf("SUCCESS: ANY() update completed in %v", duration)
+	}
+
+	// Test normal UPDATE without pg_sleep (should be instant)
+	start = time.Now()
+	_, err = SafeExecTimeout(120*time.Second,
+		"UPDATE ai_model SET name = 'Updated Normal' WHERE uuid = ANY($1::uuid[])", uuids)
+	duration = time.Since(start)
+
+	if err != nil {
+		t.Errorf("NORMAL UPDATE FAILED: %v in %v", err, duration)
+	} else if duration > 500*time.Millisecond {
+		t.Errorf("Normal UPDATE too slow: %v (expected <500ms)", duration)
+	} else {
+		t.Logf("SUCCESS: Normal UPDATE completed in %v", duration)
+	}
+}
