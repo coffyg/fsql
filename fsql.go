@@ -515,7 +515,6 @@ var DefaultDBTimeout = 30 * time.Second
 
 var (
 	dbTimeoutWarningLogged bool
-	callCounter            int
 )
 
 // SafeExec wraps Db.Exec with automatic timeout
@@ -546,10 +545,6 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Track call sequence and timing
-	callCounter++
-	callNum := callCounter
-	
 	startTime := time.Now()
 	result, err := Db.ExecContext(ctx, query, args...)
 	actualDuration := time.Since(startTime)
