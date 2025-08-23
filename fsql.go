@@ -67,12 +67,12 @@ var (
 
 	// Default configuration - reasonable production defaults
 	DefaultConfig = DBConfig{
-		MaxConnections:  50,  // Reasonable default instead of crazy 1200
+		MaxConnections:  50, // Reasonable default instead of crazy 1200
 		MinConnections:  5,
 		MaxConnLifetime: 5 * time.Minute,
-		MaxConnIdleTime: 5 * time.Minute, 
+		MaxConnIdleTime: 5 * time.Minute,
 		HealthCheck:     false,
-		DefaultTimeout:  3 * time.Second,  // Reasonable timeout for complex queries
+		DefaultTimeout:  3 * time.Second, // Reasonable timeout for complex queries
 	}
 )
 
@@ -240,17 +240,22 @@ func InitCustomDb(database string) *sqlx.DB {
 }
 
 // InitDB initializes the main database connection without pooling
-func InitDB(database string) {
+func InitDB(database string, config ...DBConfig) {
+	// Use default config if none provided
+	// This is a simple connection without pooling
+	cfg := DefaultConfig
+	if len(config) > 0 {
+		cfg = config[0]
+	}
+
+	// Update global timeout to match config
+	DefaultDBTimeout = cfg.DefaultTimeout
+
 	var err error
-	// Use default config and update global timeout
-	DefaultDBTimeout = DefaultConfig.DefaultTimeout
-	Db, err = PgxCreateDB(database, DefaultConfig)
+	Db, err = PgxCreateDB(database, cfg)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-
-	// Initialize prepared statement cache
-	InitPreparedCache(100, 30*time.Minute)
 }
 
 // CloseDB closes the main database connection
