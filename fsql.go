@@ -168,10 +168,10 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	poolConfig.MinConns = int32(config.MinConnections)
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
-	
+
 	// Set reasonable connection establishment timeout (separate from query timeouts)
-	poolConfig.ConnConfig.ConnectTimeout = 30 * time.Second   // Connection establishment only
-	poolConfig.HealthCheckPeriod = 1 * time.Minute            // Health check interval
+	poolConfig.ConnConfig.ConnectTimeout = 30 * time.Second // Connection establishment only
+	poolConfig.HealthCheckPeriod = 1 * time.Minute          // Health check interval
 
 	// Create the connection pool
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
@@ -526,12 +526,12 @@ func SafeExec(query string, args ...interface{}) (sql.Result, error) {
 func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (sql.Result, error) {
 	// Determine operation name based on whether this is default or custom timeout
 	operationName := "SafeExecTimeout"
-	
+
 	// Check if this was called through SafeExec (default timeout)
 	if timeout == DefaultDBTimeout {
-		operationName = "SafeExec"  // This was called through SafeExec
+		operationName = "SafeExec" // This was called through SafeExec
 	}
-	
+
 	// Show warning for first Safe wrapper usage with method name and timeout
 	if !dbTimeoutWarningLogged && logger != nil {
 		logger.Warn().
@@ -547,7 +547,7 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 
 	// Debug: Log the actual timeout being used
 	if logger != nil {
-		logger.Debug().
+		logger.Warn().
 			Str("operation", operationName).
 			Dur("timeout_requested", timeout).
 			Dur("timeout_milliseconds", timeout).
