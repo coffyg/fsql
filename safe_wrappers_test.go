@@ -19,7 +19,7 @@ func TestSafeExec(t *testing.T) {
 	          VALUES ($1, $2, $3, $4, $5)`
 	uuid := GenNewUUID("")
 
-	err := SafeExec(query, uuid, "test_key", "Test Model", "test_type", "test_provider")
+	_, err := SafeExec(query, uuid, "test_key", "Test Model", "test_type", "test_provider")
 	if err != nil {
 		t.Fatalf("SafeExec failed: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestSafeQuery(t *testing.T) {
 	// Insert test data using SafeExec
 	uuid1 := GenNewUUID("")
 	uuid2 := GenNewUUID("")
-	err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) VALUES 
+	_, err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) VALUES 
 	                 ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10)`,
 		uuid1, "key1", "Model 1", "type1", "provider1",
 		uuid2, "key2", "Model 2", "type2", "provider2")
@@ -85,7 +85,7 @@ func TestSafeGet(t *testing.T) {
 
 	// Insert test data
 	uuid := GenNewUUID("")
-	err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) 
+	_, err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) 
 	                 VALUES ($1, $2, $3, $4, $5)`,
 		uuid, "test_key", "Test Model", "test_type", "test_provider")
 	if err != nil {
@@ -117,7 +117,7 @@ func TestSafeSelect(t *testing.T) {
 	// Insert multiple test records
 	for i := 1; i <= 3; i++ {
 		uuid := GenNewUUID("")
-		err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) 
+		_, err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) 
 		                 VALUES ($1, $2, $3, $4, $5)`,
 			uuid, fmt.Sprintf("key_%d", i), fmt.Sprintf("Model %d", i), "test_type", "test_provider")
 		if err != nil {
@@ -146,7 +146,7 @@ func TestSafeQueryRow(t *testing.T) {
 
 	// Insert test data
 	uuid := GenNewUUID("")
-	err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) 
+	_, err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) 
 	                 VALUES ($1, $2, $3, $4, $5)`,
 		uuid, "test_key", "Test Model", "test_type", "test_provider")
 	if err != nil {
@@ -226,7 +226,7 @@ func TestSafeNamedQuery(t *testing.T) {
 	// Insert test data
 	for i := 1; i <= 2; i++ {
 		uuid := GenNewUUID("")
-		err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) 
+		_, err := SafeExec(`INSERT INTO ai_model (uuid, key, name, type, provider) 
 		                 VALUES ($1, $2, $3, $4, $5)`,
 			uuid, fmt.Sprintf("key_%d", i), fmt.Sprintf("Model %d", i), "query_test_type", "test_provider")
 		if err != nil {
@@ -361,7 +361,7 @@ func TestSafeWrappersTimeout(t *testing.T) {
 
 	// Test that SafeExec times out with a slow query
 	// This query should take longer than 100ms
-	err := SafeExec("SELECT pg_sleep(1)")
+	_, err := SafeExec("SELECT pg_sleep(1)")
 	if err == nil {
 		t.Error("Expected timeout error, got nil")
 	}

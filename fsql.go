@@ -520,7 +520,7 @@ var (
 )
 
 // SafeExec wraps Db.Exec with automatic timeout
-func SafeExec(query string, args ...interface{}) error {
+func SafeExec(query string, args ...interface{}) (sql.Result, error) {
 	if !dbTimeoutWarningLogged {
 		log.Printf("WARNING: Using SafeExec with automatic timeout. Consider migrating to context-aware calls.")
 		dbTimeoutWarningLogged = true
@@ -530,7 +530,7 @@ func SafeExec(query string, args ...interface{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	
-	_, err := Db.ExecContext(ctx, query, args...)
+	result, err := Db.ExecContext(ctx, query, args...)
 	
 	// Log timeout if context was cancelled
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
@@ -538,7 +538,7 @@ func SafeExec(query string, args ...interface{}) error {
 		logQueryTimeout("SafeExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
 	
-	return err
+	return result, err
 }
 
 // SafeQuery wraps Db.Query with automatic timeout  
