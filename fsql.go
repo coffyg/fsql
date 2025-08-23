@@ -522,19 +522,19 @@ func SafeExec(query string, args ...interface{}) (sql.Result, error) {
 func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (sql.Result, error) {
 	// Determine operation name based on whether this is default or custom timeout
 	operationName := "SafeExecTimeout"
-	showWarning := false
 	
-	// Only warn for default timeout usage (when called through SafeExec)
-	if !dbTimeoutWarningLogged && logger != nil && timeout == DefaultDBTimeout {
+	// Check if this was called through SafeExec (default timeout)
+	if timeout == DefaultDBTimeout {
 		operationName = "SafeExec"  // This was called through SafeExec
-		showWarning = true
 	}
 	
-	if showWarning {
+	// Show warning on first usage regardless of timeout type
+	if !dbTimeoutWarningLogged && logger != nil {
 		logger.Warn().
 			Str("operation", operationName).
-			Dur("default_timeout", DefaultDBTimeout).
-			Msg("Using Safe wrapper with default timeout - consider explicit timeouts or context-aware calls")
+			Str("query", query).
+			Dur("timeout", timeout).
+			Msg("Using Safe wrapper with automatic timeout - consider migrating to context-aware calls")
 		dbTimeoutWarningLogged = true
 	}
 

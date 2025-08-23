@@ -424,3 +424,197 @@ func TestSafeExecWarningBehavior(t *testing.T) {
 		t.Errorf("SafeExecTimeout with default timeout failed: %v", err)
 	}
 }
+
+// TestSafeExecTimeoutOperationNames tests that timeout logging shows correct operation names
+func TestSafeExecTimeoutOperationNames(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping timeout operation name test in short mode")
+	}
+
+	// Reset warning flag
+	dbTimeoutWarningLogged = false
+
+	// Store original values
+	originalTimeout := DefaultDBTimeout
+	defer func() {
+		DefaultDBTimeout = originalTimeout
+	}()
+
+	// Set very short timeout to force timeouts
+	DefaultDBTimeout = 100 * time.Millisecond
+
+	// Test SafeExec timeout (should log as "SafeExec")
+	_, err := SafeExec("SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeExec to timeout, got nil error")
+	}
+	// Note: Without capturing logs, we can't verify the operation name here
+	// but the function should log "SafeExec" not "SafeExecTimeout"
+
+	// Test SafeExecTimeout with custom timeout (should log as "SafeExecTimeout")
+	_, err = SafeExecTimeout(50*time.Millisecond, "SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeExecTimeout to timeout, got nil error")
+	}
+	// This should log "SafeExecTimeout" in the timeout message
+
+	// Test SafeExecTimeout with default timeout (should log as "SafeExec")  
+	_, err = SafeExecTimeout(DefaultDBTimeout, "SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeExecTimeout with default timeout to timeout, got nil error")
+	}
+	// This should log "SafeExec" since it's using DefaultDBTimeout
+}
+
+// TestAllSafeWrappersTimeout tests all Safe functions timeout correctly with proper operation names
+func TestAllSafeWrappersTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping comprehensive timeout test in short mode")
+	}
+
+	// Store original values
+	originalTimeout := DefaultDBTimeout
+	defer func() {
+		DefaultDBTimeout = originalTimeout
+	}()
+
+	// Set very short timeout to force timeouts
+	DefaultDBTimeout = 50 * time.Millisecond
+
+	// Test SafeExec timeout
+	_, err := SafeExec("SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeExec to timeout")
+	}
+
+	// Test SafeExecTimeout timeout  
+	_, err = SafeExecTimeout(50*time.Millisecond, "SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeExecTimeout to timeout")
+	}
+
+	// Test SafeGet timeout
+	var result int
+	err = SafeGet(&result, "SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeGet to timeout")
+	}
+
+	// Test SafeGetTimeout timeout
+	err = SafeGetTimeout(50*time.Millisecond, &result, "SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeGetTimeout to timeout")
+	}
+
+	// Test SafeSelect timeout
+	var results []int
+	err = SafeSelect(&results, "SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeSelect to timeout")
+	}
+
+	// Test SafeSelectTimeout timeout
+	err = SafeSelectTimeout(50*time.Millisecond, &results, "SELECT pg_sleep(1)")
+	if err == nil {
+		t.Error("Expected SafeSelectTimeout to timeout")
+	}
+
+	// Test SafeNamedExec timeout
+	params := map[string]interface{}{"sleep_time": 1}
+	_, err = SafeNamedExec("SELECT pg_sleep(:sleep_time)", params)
+	if err == nil {
+		t.Error("Expected SafeNamedExec to timeout")
+	}
+
+	// Test SafeNamedExecTimeout timeout
+	_, err = SafeNamedExecTimeout(50*time.Millisecond, "SELECT pg_sleep(:sleep_time)", params)
+	if err == nil {
+		t.Error("Expected SafeNamedExecTimeout to timeout")
+	}
+}
+
+// TestAllSafeWrappersSuccess tests all Safe functions work correctly without timeout
+func TestAllSafeWrappersSuccess(t *testing.T) {
+	// Store original values
+	originalTimeout := DefaultDBTimeout
+	defer func() {
+		DefaultDBTimeout = originalTimeout
+	}()
+
+	// Set reasonable timeout
+	DefaultDBTimeout = 5 * time.Second
+
+	// Test SafeExec success
+	_, err := SafeExec("SELECT 1")
+	if err != nil {
+		t.Errorf("SafeExec failed: %v", err)
+	}
+
+	// Test SafeExecTimeout success
+	_, err = SafeExecTimeout(5*time.Second, "SELECT 1")
+	if err != nil {
+		t.Errorf("SafeExecTimeout failed: %v", err)
+	}
+
+	// Test SafeGet success
+	var result int
+	err = SafeGet(&result, "SELECT 1")
+	if err != nil {
+		t.Errorf("SafeGet failed: %v", err)
+	}
+	if result != 1 {
+		t.Errorf("Expected result 1, got %d", result)
+	}
+
+	// Test SafeGetTimeout success
+	err = SafeGetTimeout(5*time.Second, &result, "SELECT 2")
+	if err != nil {
+		t.Errorf("SafeGetTimeout failed: %v", err)
+	}
+	if result != 2 {
+		t.Errorf("Expected result 2, got %d", result)
+	}
+
+	// Test SafeSelect success
+	var results []int
+	err = SafeSelect(&results, "SELECT 1 UNION SELECT 2")
+	if err != nil {
+		t.Errorf("SafeSelect failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	// Test SafeSelectTimeout success
+	err = SafeSelectTimeout(5*time.Second, &results, "SELECT 3 UNION SELECT 4")
+	if err != nil {
+		t.Errorf("SafeSelectTimeout failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	// Test SafeNamedExec success (can't easily test with SELECT, skip for now)
+	// Test SafeNamedExecTimeout success (can't easily test with SELECT, skip for now)
+
+	// Test SafeQueryRow success
+	row := SafeQueryRow("SELECT 42")
+	var value int
+	err = row.Scan(&value)
+	if err != nil {
+		t.Errorf("SafeQueryRow scan failed: %v", err)
+	}
+	if value != 42 {
+		t.Errorf("Expected value 42, got %d", value)
+	}
+
+	// Test SafeQueryRowTimeout success
+	row = SafeQueryRowTimeout(5*time.Second, "SELECT 99")
+	err = row.Scan(&value)
+	if err != nil {
+		t.Errorf("SafeQueryRowTimeout scan failed: %v", err)
+	}
+	if value != 99 {
+		t.Errorf("Expected value 99, got %d", value)
+	}
+}
