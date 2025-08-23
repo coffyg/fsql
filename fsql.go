@@ -554,16 +554,7 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 	result, err := Db.ExecContext(ctx, query, args...)
 	actualDuration := time.Since(startTime)
 
-	// Log completion with call number and actual duration
-	if logger != nil {
-		logger.Warn().
-			Str("operation", operationName).
-			Int("call_number", callNum).
-			Dur("actual_duration", actualDuration).
-			Bool("succeeded", err == nil).
-			Str("query_snippet", query[:min(len(query), 50)]).
-			Msg("Database call completed")
-	}
+	// Only log warnings for actual problems, not successful queries
 
 	// Log any context cancellation (timeout, cancellation, etc) with correct operation name
 	if err != nil && ctx.Err() != nil {
