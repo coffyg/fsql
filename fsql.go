@@ -53,6 +53,7 @@ type DBConfig struct {
 // Global database connections
 var (
 	Db             *sqlx.DB
+	mainPool       *pgxpool.Pool // Keep reference to actual pool for accurate stats
 	readReplicasDbs []*DBConnection
 	healthCheckStop chan struct{}
 	replicaMutex    sync.RWMutex
@@ -87,19 +88,36 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 		return nil, err
 	}
 
+	// Store pool reference for accurate stats
+	mainPool = pool
+
 	// Wrap pgxpool.Pool as sqlx.DB using stdlib
-	return sqlx.NewDb(stdlib.OpenDBFromPool(pool), "pgx"), nil
+	db := sqlx.NewDb(stdlib.OpenDBFromPool(pool), "pgx")
+	
+	// Disable database/sql connection pooling since pgxpool handles it
+	db.SetMaxOpenConns(0)  // 0 = unlimited, let pgxpool manage
+	db.SetMaxIdleConns(-1) // -1 = no limit, let pgxpool manage
+	db.SetConnMaxLifetime(0) // 0 = no limit, let pgxpool manage
+	
+	return db, nil
 }
 
 // PgxCreateDB creates a simple connection without pooling
-func PgxCreateDB(uri string) (*sqlx.DB, error) {
+func PgxCreateDB(uri string, config ...DBConfig) (*sqlx.DB, error) {
 	connConfig, err := pgx.ParseConfig(uri)
 	if err != nil {
 		return nil, err
 	}
 
 	pgxdb := stdlib.OpenDB(*connConfig)
-	return sqlx.NewDb(pgxdb, "pgx"), nil
+	db := sqlx.NewDb(pgxdb, "pgx")
+	
+	// Use default pgx connection management without database/sql interference
+	db.SetMaxOpenConns(0)  // 0 = unlimited, let pgx manage
+	db.SetMaxIdleConns(-1) // -1 = no limit, let pgx manage  
+	db.SetConnMaxLifetime(0) // 0 = no limit, let pgx manage
+	
+	return db, nil
 }
 
 // InitDBPool initializes the main database pool with custom configuration
@@ -383,4 +401,20 @@ func ExecuteWithRetry(query string, args ...interface{}) error {
 		return errors.New("max retries exceeded: " + lastErr.Error())
 	}
 	return errors.New("max retries exceeded with unknown error")
+}
+
+// GetPoolStats returns accurate connection pool statistics
+// Returns pgxpool stats if available, falls back to database/sql stats otherwise
+func GetPoolStats() (openConns, inUse, idle int32, waitCount int64, waitDuration time.Duration) {
+	if mainPool != nil {
+		// Get accurate stats from pgxpool
+		stats := mainPool.Stat()
+		return stats.TotalConns(), stats.AcquiredConns(), stats.IdleConns(), 
+		       stats.EmptyAcquireCount(), stats.EmptyAcquireWaitTime()
+	} else {
+		// Fall back to database/sql stats (less accurate with our setup)
+		sqlStats := Db.Stats()
+		return int32(sqlStats.OpenConnections), int32(sqlStats.InUse), int32(sqlStats.Idle),
+		       sqlStats.WaitCount, sqlStats.WaitDuration
+	}
 }
