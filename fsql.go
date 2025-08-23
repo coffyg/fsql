@@ -3,9 +3,11 @@ package fsql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx" // SQL library
+	"github.com/rs/zerolog"
 )
 
 // Default connection settings
@@ -48,6 +51,7 @@ type DBConfig struct {
 	MaxConnLifetime time.Duration
 	MaxConnIdleTime time.Duration
 	HealthCheck     bool
+	DefaultTimeout  time.Duration
 }
 
 // Global database connections
@@ -58,6 +62,9 @@ var (
 	healthCheckStop chan struct{}
 	replicaMutex    sync.RWMutex
 	
+	// Global logger for fsql operations
+	logger *zerolog.Logger
+	
 	// Default configuration
 	DefaultConfig = DBConfig{
 		MaxConnections:  defaultMaxConnections,
@@ -65,8 +72,107 @@ var (
 		MaxConnLifetime: defaultMaxConnLifetime,
 		MaxConnIdleTime: defaultMaxConnIdleTime,
 		HealthCheck:     true,
+		DefaultTimeout:  30 * time.Second,
 	}
 )
+
+// SetLogger configures the global logger for fsql operations
+func SetLogger(l *zerolog.Logger) {
+	logger = l
+}
+
+// getEffectiveTimeout returns the timeout to use, preferring config over default
+func getEffectiveTimeout(config ...DBConfig) time.Duration {
+	if len(config) > 0 && config[0].DefaultTimeout > 0 {
+		return config[0].DefaultTimeout
+	}
+	return DefaultDBTimeout
+}
+
+// logQueryTimeout logs when a database query times out
+func logQueryTimeout(operation, query string, timeout time.Duration, poolStats ...interface{}) {
+	if logger == nil {
+		return
+	}
+	
+	// Extract table name from query for better logging
+	tableName := extractTableName(query)
+	
+	event := logger.Warn().
+		Str("operation", operation).
+		Str("table", tableName).
+		Dur("timeout", timeout).
+		Str("query_preview", truncateQuery(query, 100))
+	
+	// Add pool stats if available
+	if len(poolStats) >= 5 {
+		if openConns, ok := poolStats[0].(int32); ok {
+			event = event.Int32("pool_open_conns", openConns)
+		}
+		if inUse, ok := poolStats[1].(int32); ok {
+			event = event.Int32("pool_in_use", inUse)
+		}
+		if idle, ok := poolStats[2].(int32); ok {
+			event = event.Int32("pool_idle", idle)
+		}
+	}
+	
+	event.Msg("Database query timed out")
+}
+
+// extractTableName attempts to extract table name from SQL query
+func extractTableName(query string) string {
+	query = strings.ToUpper(strings.TrimSpace(query))
+	
+	// Handle INSERT statements
+	if strings.HasPrefix(query, "INSERT INTO") {
+		parts := strings.Fields(query)
+		if len(parts) >= 3 {
+			return strings.Trim(parts[2], "\"`)") // Remove quotes/backticks
+		}
+	}
+	
+	// Handle UPDATE statements
+	if strings.HasPrefix(query, "UPDATE") {
+		parts := strings.Fields(query)
+		if len(parts) >= 2 {
+			return strings.Trim(parts[1], "\"`)") 
+		}
+	}
+	
+	// Handle SELECT statements with FROM
+	if strings.Contains(query, "FROM ") {
+		fromIndex := strings.Index(query, "FROM ")
+		if fromIndex != -1 {
+			afterFrom := query[fromIndex+5:]
+			parts := strings.Fields(afterFrom)
+			if len(parts) >= 1 {
+				return strings.Trim(parts[0], "\"`)") 
+			}
+		}
+	}
+	
+	// Handle DELETE statements
+	if strings.HasPrefix(query, "DELETE FROM") {
+		parts := strings.Fields(query)
+		if len(parts) >= 3 {
+			return strings.Trim(parts[2], "\"`)") 
+		}
+	}
+	
+	return "unknown"
+}
+
+// truncateQuery truncates a query string for logging
+func truncateQuery(query string, maxLen int) string {
+	query = strings.ReplaceAll(query, "\n", " ")
+	query = strings.ReplaceAll(query, "\t", " ")
+	
+	if len(query) <= maxLen {
+		return query
+	}
+	return query[:maxLen] + "..."
+}
 
 // PgxCreateDBWithPool creates a connection pool with custom configuration
 func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
@@ -401,6 +507,146 @@ func ExecuteWithRetry(query string, args ...interface{}) error {
 		return errors.New("max retries exceeded: " + lastErr.Error())
 	}
 	return errors.New("max retries exceeded with unknown error")
+}
+
+// Default timeout for database operations
+var DefaultDBTimeout = 30 * time.Second
+
+// Timeout wrapper functions - these add automatic timeouts to existing context-less calls
+// This provides immediate protection for legacy code without requiring refactoring
+
+var (
+	dbTimeoutWarningLogged bool
+)
+
+// SafeExec wraps Db.Exec with automatic timeout
+func SafeExec(query string, args ...interface{}) error {
+	if !dbTimeoutWarningLogged {
+		log.Printf("WARNING: Using SafeExec with automatic timeout. Consider migrating to context-aware calls.")
+		dbTimeoutWarningLogged = true
+	}
+	
+	timeout := DefaultDBTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	
+	_, err := Db.ExecContext(ctx, query, args...)
+	
+	// Log timeout if context was cancelled
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	return err
+}
+
+// SafeQuery wraps Db.Query with automatic timeout  
+func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
+	timeout := DefaultDBTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	
+	rows, err := Db.QueryContext(ctx, query, args...)
+	
+	// Log timeout if context was cancelled
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeQuery", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	return rows, err
+}
+
+// SafeGet wraps Db.Get with automatic timeout
+func SafeGet(dest interface{}, query string, args ...interface{}) error {
+	timeout := DefaultDBTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	
+	err := Db.GetContext(ctx, dest, query, args...)
+	
+	// Log timeout if context was cancelled
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeGet", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	return err
+}
+
+// SafeSelect wraps Db.Select with automatic timeout
+func SafeSelect(dest interface{}, query string, args ...interface{}) error {
+	timeout := DefaultDBTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	
+	err := Db.SelectContext(ctx, dest, query, args...)
+	
+	// Log timeout if context was cancelled
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeSelect", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	return err
+}
+
+// SafeQueryRow wraps Db.QueryRow with automatic timeout
+func SafeQueryRow(query string, args ...interface{}) *sql.Row {
+	timeout := DefaultDBTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	
+	// Note: QueryRowContext doesn't return error immediately, so we can't log timeout here
+	// The timeout will be detected when Scan() is called on the returned Row
+	return Db.QueryRowContext(ctx, query, args...)
+}
+
+// SafeNamedExec wraps Db.NamedExec with automatic timeout
+func SafeNamedExec(query string, arg interface{}) (sql.Result, error) {
+	timeout := DefaultDBTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	
+	result, err := Db.NamedExecContext(ctx, query, arg)
+	
+	// Log timeout if context was cancelled
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeNamedExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	return result, err
+}
+
+// SafeNamedQuery wraps Db.NamedQuery with automatic timeout
+func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
+	timeout := DefaultDBTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	
+	rows, err := Db.NamedQueryContext(ctx, query, arg)
+	
+	// Log timeout if context was cancelled
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeNamedQuery", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	return rows, err
+}
+
+// SafeBegin wraps Db.BeginTx (no timeout for transaction creation - transactions are long-lived)
+func SafeBegin() (*sql.Tx, error) {
+	// Transactions should not have timeout on creation since they live beyond function scope
+	return Db.BeginTx(context.Background(), nil)
+}
+
+// SafeBeginx wraps Db.BeginTxx (no timeout for transaction creation - transactions are long-lived)
+func SafeBeginx() (*sqlx.Tx, error) {
+	// Transactions should not have timeout on creation since they live beyond function scope
+	return Db.BeginTxx(context.Background(), nil)
 }
 
 // GetPoolStats returns accurate connection pool statistics
