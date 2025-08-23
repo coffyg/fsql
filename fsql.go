@@ -102,7 +102,7 @@ func logQueryTimeout(operation, query string, timeout time.Duration, poolStats .
 		Str("operation", operation).
 		Str("table", tableName).
 		Dur("timeout", timeout).
-		Str("query_preview", truncateQuery(query, 100))
+		Str("query", query)
 	
 	// Add pool stats if available
 	if len(poolStats) >= 5 {
@@ -521,8 +521,11 @@ var (
 
 // SafeExec wraps Db.Exec with automatic timeout
 func SafeExec(query string, args ...interface{}) (sql.Result, error) {
-	if !dbTimeoutWarningLogged {
-		log.Printf("WARNING: Using SafeExec with automatic timeout. Consider migrating to context-aware calls.")
+	if !dbTimeoutWarningLogged && logger != nil {
+		logger.Warn().
+			Str("operation", "SafeExec").
+			Str("query", query).
+			Msg("Using Safe wrapper with automatic timeout - consider migrating to context-aware calls")
 		dbTimeoutWarningLogged = true
 	}
 	
@@ -532,8 +535,8 @@ func SafeExec(query string, args ...interface{}) (sql.Result, error) {
 	
 	result, err := Db.ExecContext(ctx, query, args...)
 	
-	// Log timeout if context was cancelled
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
+	// Log any context cancellation (timeout, cancellation, etc)
+	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
@@ -549,8 +552,8 @@ func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
 	
 	rows, err := Db.QueryContext(ctx, query, args...)
 	
-	// Log timeout if context was cancelled
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
+	// Log any context cancellation (timeout, cancellation, etc)
+	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeQuery", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
@@ -566,8 +569,8 @@ func SafeGet(dest interface{}, query string, args ...interface{}) error {
 	
 	err := Db.GetContext(ctx, dest, query, args...)
 	
-	// Log timeout if context was cancelled
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
+	// Log any context cancellation (timeout, cancellation, etc)
+	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeGet", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
@@ -583,8 +586,8 @@ func SafeSelect(dest interface{}, query string, args ...interface{}) error {
 	
 	err := Db.SelectContext(ctx, dest, query, args...)
 	
-	// Log timeout if context was cancelled
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
+	// Log any context cancellation (timeout, cancellation, etc)
+	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeSelect", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
@@ -611,8 +614,8 @@ func SafeNamedExec(query string, arg interface{}) (sql.Result, error) {
 	
 	result, err := Db.NamedExecContext(ctx, query, arg)
 	
-	// Log timeout if context was cancelled
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
+	// Log any context cancellation (timeout, cancellation, etc)
+	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeNamedExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
@@ -628,8 +631,8 @@ func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
 	
 	rows, err := Db.NamedQueryContext(ctx, query, arg)
 	
-	// Log timeout if context was cancelled
-	if err != nil && ctx.Err() == context.DeadlineExceeded {
+	// Log any context cancellation (timeout, cancellation, etc)
+	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeNamedQuery", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
