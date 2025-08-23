@@ -618,3 +618,45 @@ func TestAllSafeWrappersSuccess(t *testing.T) {
 		t.Errorf("Expected value 99, got %d", value)
 	}
 }
+
+// TestSafeExecTimeoutActualBehavior tests that long custom timeouts actually work
+func TestSafeExecTimeoutActualBehavior(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping long timeout test in short mode")
+	}
+
+	// Reset warning flag
+	dbTimeoutWarningLogged = false
+
+	// Test that a 10-second timeout actually waits 10 seconds before failing
+	start := time.Now()
+	_, err := SafeExecTimeout(10*time.Second, "SELECT pg_sleep(15)")
+	duration := time.Since(start)
+
+	// Should have failed after ~10 seconds, not instantly
+	if err == nil {
+		t.Error("Expected timeout error after 10s, got success")
+	}
+
+	// Duration should be close to 10s, not 2s or instant
+	if duration < 8*time.Second {
+		t.Errorf("Timeout happened too early: expected ~10s, got %v", duration)
+	}
+	if duration > 12*time.Second {
+		t.Errorf("Timeout happened too late: expected ~10s, got %v", duration)
+	}
+
+	// Test that a 3-second timeout works correctly
+	start = time.Now()
+	_, err = SafeExecTimeout(3*time.Second, "SELECT pg_sleep(5)")
+	duration = time.Since(start)
+
+	if err == nil {
+		t.Error("Expected timeout error after 3s, got success")
+	}
+
+	// Duration should be close to 3s
+	if duration < 2500*time.Millisecond || duration > 4*time.Second {
+		t.Errorf("3s timeout duration incorrect: expected ~3s, got %v", duration)
+	}
+}

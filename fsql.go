@@ -168,6 +168,10 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	poolConfig.MinConns = int32(config.MinConnections)
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
+	
+	// Set reasonable connection establishment timeout (separate from query timeouts)
+	poolConfig.ConnConfig.ConnectTimeout = 30 * time.Second   // Connection establishment only
+	poolConfig.HealthCheckPeriod = 1 * time.Minute            // Health check interval
 
 	// Create the connection pool
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
@@ -528,24 +532,43 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 		operationName = "SafeExec"  // This was called through SafeExec
 	}
 	
-	// Show warning on first usage regardless of timeout type
+	// Show warning for first Safe wrapper usage with method name and timeout
 	if !dbTimeoutWarningLogged && logger != nil {
 		logger.Warn().
 			Str("operation", operationName).
 			Str("query", query).
 			Dur("timeout", timeout).
-			Msg("Using Safe wrapper with automatic timeout - consider migrating to context-aware calls")
+			Msg("Using Safe wrapper with timeout protection")
 		dbTimeoutWarningLogged = true
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	// Debug: Log the actual timeout being used
+	if logger != nil {
+		logger.Debug().
+			Str("operation", operationName).
+			Dur("timeout_requested", timeout).
+			Dur("timeout_milliseconds", timeout).
+			Msg("Starting database operation with timeout")
+	}
+
+	startTime := time.Now()
 	result, err := Db.ExecContext(ctx, query, args...)
+	actualDuration := time.Since(startTime)
 
 	// Log any context cancellation (timeout, cancellation, etc) with correct operation name
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		if logger != nil {
+			logger.Error().
+				Str("operation", operationName).
+				Dur("timeout_requested", timeout).
+				Dur("actual_duration", actualDuration).
+				Err(ctx.Err()).
+				Msg("Query failed with context error - debugging timeout")
+		}
 		logQueryTimeout(operationName, query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
 
