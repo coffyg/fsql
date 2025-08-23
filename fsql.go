@@ -518,6 +518,11 @@ var (
 
 // SafeExec wraps Db.Exec with automatic timeout
 func SafeExec(query string, args ...interface{}) (sql.Result, error) {
+	return SafeExecTimeout(DefaultDBTimeout, query, args...)
+}
+
+// SafeExecTimeout wraps Db.Exec with custom timeout
+func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (sql.Result, error) {
 	if !dbTimeoutWarningLogged && logger != nil {
 		logger.Warn().
 			Str("operation", "SafeExec").
@@ -526,7 +531,6 @@ func SafeExec(query string, args ...interface{}) (sql.Result, error) {
 		dbTimeoutWarningLogged = true
 	}
 
-	timeout := DefaultDBTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -543,7 +547,11 @@ func SafeExec(query string, args ...interface{}) (sql.Result, error) {
 
 // SafeQuery wraps Db.Query with automatic timeout
 func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
-	timeout := DefaultDBTimeout
+	return SafeQueryTimeout(DefaultDBTimeout, query, args...)
+}
+
+// SafeQueryTimeout wraps Db.Query with custom timeout
+func SafeQueryTimeout(timeout time.Duration, query string, args ...interface{}) (*sql.Rows, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -560,7 +568,11 @@ func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
 
 // SafeGet wraps Db.Get with automatic timeout
 func SafeGet(dest interface{}, query string, args ...interface{}) error {
-	timeout := DefaultDBTimeout
+	return SafeGetTimeout(DefaultDBTimeout, dest, query, args...)
+}
+
+// SafeGetTimeout wraps Db.Get with custom timeout
+func SafeGetTimeout(timeout time.Duration, dest interface{}, query string, args ...interface{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -577,7 +589,11 @@ func SafeGet(dest interface{}, query string, args ...interface{}) error {
 
 // SafeSelect wraps Db.Select with automatic timeout
 func SafeSelect(dest interface{}, query string, args ...interface{}) error {
-	timeout := DefaultDBTimeout
+	return SafeSelectTimeout(DefaultDBTimeout, dest, query, args...)
+}
+
+// SafeSelectTimeout wraps Db.Select with custom timeout
+func SafeSelectTimeout(timeout time.Duration, dest interface{}, query string, args ...interface{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -594,7 +610,11 @@ func SafeSelect(dest interface{}, query string, args ...interface{}) error {
 
 // SafeQueryRow wraps Db.QueryRow with automatic timeout
 func SafeQueryRow(query string, args ...interface{}) *sql.Row {
-	timeout := DefaultDBTimeout
+	return SafeQueryRowTimeout(DefaultDBTimeout, query, args...)
+}
+
+// SafeQueryRowTimeout wraps Db.QueryRow with custom timeout
+func SafeQueryRowTimeout(timeout time.Duration, query string, args ...interface{}) *sql.Row {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -605,7 +625,11 @@ func SafeQueryRow(query string, args ...interface{}) *sql.Row {
 
 // SafeNamedExec wraps Db.NamedExec with automatic timeout
 func SafeNamedExec(query string, arg interface{}) (sql.Result, error) {
-	timeout := DefaultDBTimeout
+	return SafeNamedExecTimeout(DefaultDBTimeout, query, arg)
+}
+
+// SafeNamedExecTimeout wraps Db.NamedExec with custom timeout
+func SafeNamedExecTimeout(timeout time.Duration, query string, arg interface{}) (sql.Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -622,7 +646,11 @@ func SafeNamedExec(query string, arg interface{}) (sql.Result, error) {
 
 // SafeNamedQuery wraps Db.NamedQuery with automatic timeout
 func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
-	timeout := DefaultDBTimeout
+	return SafeNamedQueryTimeout(DefaultDBTimeout, query, arg)
+}
+
+// SafeNamedQueryTimeout wraps Db.NamedQuery with custom timeout
+func SafeNamedQueryTimeout(timeout time.Duration, query string, arg interface{}) (*sqlx.Rows, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
