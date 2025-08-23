@@ -169,9 +169,11 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
 
-	// Set reasonable connection establishment timeout (separate from query timeouts)
-	poolConfig.ConnConfig.ConnectTimeout = 30 * time.Second // Connection establishment only
-	poolConfig.HealthCheckPeriod = 1 * time.Minute          // Health check interval
+	// Configure connection timeouts to prevent hanging
+	poolConfig.ConnConfig.ConnectTimeout = 10 * time.Second // Connection establishment timeout
+	poolConfig.HealthCheckPeriod = 30 * time.Second         // Health check interval - reduced for faster recovery
+	// pgx v5 pool acquisition timeout is handled via context timeouts in Safe* functions
+	// This prevents the 5k connection leak issue by failing fast instead of hanging
 
 	// Create the connection pool
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
@@ -185,20 +187,19 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	// Wrap pgxpool.Pool as sqlx.DB using stdlib
 	db := sqlx.NewDb(stdlib.OpenDBFromPool(pool), "pgx")
 
-	// Disable database/sql connection pooling since pgxpool handles it
-	db.SetMaxOpenConns(0)    // 0 = unlimited, let pgxpool manage
-	db.SetMaxIdleConns(-1)   // -1 = no limit, let pgxpool manage
-	db.SetConnMaxLifetime(0) // 0 = no limit, let pgxpool manage
+	// Let pgxpool handle all connection management - don't set database/sql limits
+	// Setting these to 0/-1 can create conflicts with pgxpool's internal management
+	// The pgxpool configuration above handles all connection limits and timeouts
 
 	return db, nil
 }
 
 // PgxCreateDB creates a simple connection without pooling
 func PgxCreateDB(uri string, config ...DBConfig) (*sqlx.DB, error) {
-	// Get effective configuration
-	cfg := DefaultConfig
+	// Get effective configuration (for potential future use)
+	_ = DefaultConfig
 	if len(config) > 0 {
-		cfg = config[0]
+		_ = config[0]
 	}
 
 	connConfig, err := pgx.ParseConfig(uri)
@@ -209,10 +210,9 @@ func PgxCreateDB(uri string, config ...DBConfig) (*sqlx.DB, error) {
 	pgxdb := stdlib.OpenDB(*connConfig)
 	db := sqlx.NewDb(pgxdb, "pgx")
 
-	// Apply configuration to connection limits
-	db.SetMaxOpenConns(cfg.MaxConnections)
-	db.SetMaxIdleConns(cfg.MinConnections)
-	db.SetConnMaxLifetime(cfg.MaxConnLifetime)
+	// Let pgx handle connection management - don't set database/sql limits
+	// Setting these can interfere with pgx's connection handling
+	// The pgx driver manages connections internally
 
 	return db, nil
 }
@@ -549,18 +549,33 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 	result, err := Db.ExecContext(ctx, query, args...)
 	actualDuration := time.Since(startTime)
 
-	// Only log warnings for actual problems, not successful queries
-
+	// Enhanced error detection and logging for connection vs query timeouts
+	
 	// Log any context cancellation (timeout, cancellation, etc) with correct operation name
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		
+		// Detect likely pool exhaustion vs query timeout
+		isPoolExhausted := (inUse >= openConns) && (idle == 0) && (waitCount > 0)
+		timeoutType := "query_timeout"
+		if isPoolExhausted && actualDuration < timeout/2 {
+			timeoutType = "pool_acquisition_timeout"
+		}
+		
 		if logger != nil {
 			logger.Error().
 				Str("operation", operationName).
+				Str("timeout_type", timeoutType).
 				Dur("timeout_requested", timeout).
 				Dur("actual_duration", actualDuration).
+				Bool("pool_exhausted", isPoolExhausted).
+				Int32("pool_open", openConns).
+				Int32("pool_in_use", inUse).
+				Int32("pool_idle", idle).
+				Int64("pool_wait_count", waitCount).
+				Dur("pool_wait_duration", waitDuration).
 				Err(ctx.Err()).
-				Msg("Query failed with context error - debugging timeout")
+				Msg("Database operation failed with context error")
 		}
 		logQueryTimeout(operationName, query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
@@ -574,11 +589,26 @@ func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
 }
 
 // SafeQueryTimeout wraps Db.Query with custom timeout
-// Note: Uses background context to avoid cancellation during row scanning
+// Note: Uses timeout context for query execution but allows row scanning after context expires
 func SafeQueryTimeout(timeout time.Duration, query string, args ...interface{}) (*sql.Rows, error) {
-	// For Query functions that return rows, we can't use timeout contexts
-	// because row scanning happens after the function returns
-	rows, err := Db.QueryContext(context.Background(), query, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
+	
+	rows, err := Db.QueryContext(ctx, query, args...)
+	
+	// Log context cancellation issues for debugging
+	if err != nil && ctx.Err() != nil {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeQueryTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	// Schedule context cancellation after a delay to allow row scanning
+	// This prevents resource leaks while allowing proper row consumption
+	go func() {
+		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
+		cancel()
+	}()
+	
 	return rows, err
 }
 
@@ -630,11 +660,26 @@ func SafeQueryRow(query string, args ...interface{}) *sql.Row {
 }
 
 // SafeQueryRowTimeout wraps Db.QueryRow with custom timeout
-// Note: Uses background context to avoid cancellation during scanning
+// Note: Uses timeout context for query execution but allows row scanning after context expires
 func SafeQueryRowTimeout(timeout time.Duration, query string, args ...interface{}) *sql.Row {
-	// For QueryRow functions, we can't use timeout contexts
-	// because row scanning happens after the function returns
-	return Db.QueryRowContext(context.Background(), query, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
+	
+	row := Db.QueryRowContext(ctx, query, args...)
+	
+	// Note: QueryRow doesn't return error directly, but we can check context state
+	if ctx.Err() != nil {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeQueryRowTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	// Schedule context cancellation after a delay to allow row scanning
+	go func() {
+		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
+		cancel()
+	}()
+	
+	return row
 }
 
 // SafeNamedExec wraps Db.NamedExec with automatic timeout
@@ -664,11 +709,25 @@ func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
 }
 
 // SafeNamedQueryTimeout wraps Db.NamedQuery with custom timeout
-// Note: Uses background context to avoid cancellation during row scanning
+// Note: Uses timeout context for query execution but allows row scanning after context expires
 func SafeNamedQueryTimeout(timeout time.Duration, query string, arg interface{}) (*sqlx.Rows, error) {
-	// For NamedQuery functions that return rows, we can't use timeout contexts
-	// because row scanning happens after the function returns
-	rows, err := Db.NamedQueryContext(context.Background(), query, arg)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
+	
+	rows, err := Db.NamedQueryContext(ctx, query, arg)
+	
+	// Log context cancellation issues for debugging
+	if err != nil && ctx.Err() != nil {
+		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
+		logQueryTimeout("SafeNamedQueryTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+	}
+	
+	// Schedule context cancellation after a delay to allow row scanning
+	go func() {
+		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
+		cancel()
+	}()
+	
 	return rows, err
 }
 
@@ -690,8 +749,25 @@ func GetPoolStats() (openConns, inUse, idle int32, waitCount int64, waitDuration
 	if mainPool != nil {
 		// Get accurate stats from pgxpool
 		stats := mainPool.Stat()
-		return stats.TotalConns(), stats.AcquiredConns(), stats.IdleConns(),
-			stats.EmptyAcquireCount(), stats.EmptyAcquireWaitTime()
+		openConns = stats.TotalConns()
+		inUse = stats.AcquiredConns()
+		idle = stats.IdleConns()
+		waitCount = stats.EmptyAcquireCount()
+		waitDuration = stats.EmptyAcquireWaitTime()
+		
+		// Detect potential connection leaks - warn if connections exceed configured limits significantly
+		if logger != nil && openConns > int32(DefaultConfig.MaxConnections*2) {
+			logger.Warn().
+				Int32("total_conns", openConns).
+				Int32("acquired_conns", inUse).
+				Int32("idle_conns", idle).
+				Int64("empty_acquire_count", waitCount).
+				Dur("empty_acquire_wait_time", waitDuration).
+				Int("configured_max", DefaultConfig.MaxConnections).
+				Msg("Potential connection leak detected - connections exceed configured maximum")
+		}
+		
+		return openConns, inUse, idle, waitCount, waitDuration
 	} else {
 		// Fall back to database/sql stats (less accurate with our setup)
 		sqlStats := Db.Stats()
