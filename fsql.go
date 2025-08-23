@@ -219,10 +219,9 @@ func InitDBPool(database string, config ...DBConfig) {
 	cfg := DefaultConfig
 	if len(config) > 0 {
 		cfg = config[0]
+		// Only update global timeout when config is explicitly passed
+		DefaultDBTimeout = cfg.DefaultTimeout
 	}
-
-	// Update global timeout to match config
-	DefaultDBTimeout = cfg.DefaultTimeout
 
 	Db, err = PgxCreateDBWithPool(database, cfg)
 	if err != nil {
@@ -242,14 +241,12 @@ func InitCustomDb(database string) *sqlx.DB {
 // InitDB initializes the main database connection without pooling
 func InitDB(database string, config ...DBConfig) {
 	// Use default config if none provided
-	// This is a simple connection without pooling
 	cfg := DefaultConfig
 	if len(config) > 0 {
 		cfg = config[0]
+		// Only update global timeout when config is explicitly passed
+		DefaultDBTimeout = cfg.DefaultTimeout
 	}
-
-	// Update global timeout to match config
-	DefaultDBTimeout = cfg.DefaultTimeout
 
 	var err error
 	Db, err = PgxCreateDB(database, cfg)
@@ -525,8 +522,9 @@ func SafeExec(query string, args ...interface{}) (sql.Result, error) {
 func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (sql.Result, error) {
 	if !dbTimeoutWarningLogged && logger != nil {
 		logger.Warn().
-			Str("operation", "SafeExec").
+			Str("operation", "SafeExecTimeout").
 			Str("query", query).
+			Dur("timeout", timeout).
 			Msg("Using Safe wrapper with automatic timeout - consider migrating to context-aware calls")
 		dbTimeoutWarningLogged = true
 	}
@@ -539,7 +537,7 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+		logQueryTimeout("SafeExecTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
 
 	return result, err
@@ -551,18 +549,11 @@ func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
 }
 
 // SafeQueryTimeout wraps Db.Query with custom timeout
+// Note: Uses background context to avoid context cancellation during row scanning
 func SafeQueryTimeout(timeout time.Duration, query string, args ...interface{}) (*sql.Rows, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	rows, err := Db.QueryContext(ctx, query, args...)
-
-	// Log any context cancellation (timeout, cancellation, etc)
-	if err != nil && ctx.Err() != nil {
-		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeQuery", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
-	}
-
+	// For Query functions that return rows, we can't use timeout contexts
+	// because row scanning happens after the function returns
+	rows, err := Db.QueryContext(context.Background(), query, args...)
 	return rows, err
 }
 
@@ -581,7 +572,7 @@ func SafeGetTimeout(timeout time.Duration, dest interface{}, query string, args 
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeGet", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+		logQueryTimeout("SafeGetTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
 
 	return err
@@ -602,7 +593,7 @@ func SafeSelectTimeout(timeout time.Duration, dest interface{}, query string, ar
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeSelect", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+		logQueryTimeout("SafeSelectTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
 
 	return err
@@ -614,13 +605,11 @@ func SafeQueryRow(query string, args ...interface{}) *sql.Row {
 }
 
 // SafeQueryRowTimeout wraps Db.QueryRow with custom timeout
+// Note: Uses background context to avoid context cancellation during scanning
 func SafeQueryRowTimeout(timeout time.Duration, query string, args ...interface{}) *sql.Row {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	// Note: QueryRowContext doesn't return error immediately, so we can't log timeout here
-	// The timeout will be detected when Scan() is called on the returned Row
-	return Db.QueryRowContext(ctx, query, args...)
+	// For QueryRow functions, we can't use timeout contexts
+	// because row scanning happens after the function returns
+	return Db.QueryRowContext(context.Background(), query, args...)
 }
 
 // SafeNamedExec wraps Db.NamedExec with automatic timeout
@@ -638,7 +627,7 @@ func SafeNamedExecTimeout(timeout time.Duration, query string, arg interface{}) 
 	// Log any context cancellation (timeout, cancellation, etc)
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeNamedExec", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
+		logQueryTimeout("SafeNamedExecTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
 
 	return result, err
@@ -650,18 +639,11 @@ func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
 }
 
 // SafeNamedQueryTimeout wraps Db.NamedQuery with custom timeout
+// Note: Uses background context to avoid context cancellation during row scanning
 func SafeNamedQueryTimeout(timeout time.Duration, query string, arg interface{}) (*sqlx.Rows, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	rows, err := Db.NamedQueryContext(ctx, query, arg)
-
-	// Log any context cancellation (timeout, cancellation, etc)
-	if err != nil && ctx.Err() != nil {
-		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeNamedQuery", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
-	}
-
+	// For NamedQuery functions that return rows, we can't use timeout contexts
+	// because row scanning happens after the function returns
+	rows, err := Db.NamedQueryContext(context.Background(), query, arg)
 	return rows, err
 }
 
