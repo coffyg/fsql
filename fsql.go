@@ -515,6 +515,7 @@ var DefaultDBTimeout = 30 * time.Second
 
 var (
 	dbTimeoutWarningLogged bool
+	callCounter            int
 )
 
 // SafeExec wraps Db.Exec with automatic timeout
@@ -545,18 +546,24 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Debug: Log the actual timeout being used
-	if logger != nil {
-		logger.Warn().
-			Str("operation", operationName).
-			Dur("timeout_requested", timeout).
-			Dur("timeout_milliseconds", timeout).
-			Msg("Starting database operation with timeout")
-	}
-
+	// Track call sequence and timing
+	callCounter++
+	callNum := callCounter
+	
 	startTime := time.Now()
 	result, err := Db.ExecContext(ctx, query, args...)
 	actualDuration := time.Since(startTime)
+
+	// Log completion with call number and actual duration
+	if logger != nil {
+		logger.Warn().
+			Str("operation", operationName).
+			Int("call_number", callNum).
+			Dur("actual_duration", actualDuration).
+			Bool("succeeded", err == nil).
+			Str("query_snippet", query[:min(len(query), 50)]).
+			Msg("Database call completed")
+	}
 
 	// Log any context cancellation (timeout, cancellation, etc) with correct operation name
 	if err != nil && ctx.Err() != nil {
