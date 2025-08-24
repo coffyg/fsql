@@ -223,7 +223,8 @@ func InitDBPool(database string, config ...DBConfig) {
 	cfg := DefaultConfig
 	if len(config) > 0 {
 		cfg = config[0]
-		// Only update global timeout when config is explicitly passed
+		// Update entire global config when config is explicitly passed
+		DefaultConfig = cfg
 		DefaultDBTimeout = cfg.DefaultTimeout
 	}
 
@@ -248,7 +249,8 @@ func InitDB(database string, config ...DBConfig) {
 	cfg := DefaultConfig
 	if len(config) > 0 {
 		cfg = config[0]
-		// Only update global timeout when config is explicitly passed
+		// Update entire global config when config is explicitly passed
+		DefaultConfig = cfg
 		DefaultDBTimeout = cfg.DefaultTimeout
 	}
 
@@ -755,8 +757,8 @@ func GetPoolStats() (openConns, inUse, idle int32, waitCount int64, waitDuration
 		waitCount = stats.EmptyAcquireCount()
 		waitDuration = stats.EmptyAcquireWaitTime()
 		
-		// Detect potential connection leaks - warn if connections exceed configured limits significantly
-		if logger != nil && openConns > int32(DefaultConfig.MaxConnections*2) {
+		// Detect potential connection leaks - warn if connections exceed 80% of configured maximum
+		if logger != nil && openConns > int32(float64(DefaultConfig.MaxConnections)*0.8) {
 			logger.Warn().
 				Int32("total_conns", openConns).
 				Int32("acquired_conns", inUse).
@@ -764,7 +766,7 @@ func GetPoolStats() (openConns, inUse, idle int32, waitCount int64, waitDuration
 				Int64("empty_acquire_count", waitCount).
 				Dur("empty_acquire_wait_time", waitDuration).
 				Int("configured_max", DefaultConfig.MaxConnections).
-				Msg("Potential connection leak detected - connections exceed configured maximum")
+				Msg("Potential connection leak detected - connections exceed 80% of configured maximum")
 		}
 		
 		return openConns, inUse, idle, waitCount, waitDuration
