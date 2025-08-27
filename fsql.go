@@ -536,7 +536,7 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 
 	// Show warning for first Safe wrapper usage with method name and timeout
 	if !dbTimeoutWarningLogged && logger != nil {
-		logger.Warn().
+		logger.Debug().
 			Str("operation", operationName).
 			Str("query", query).
 			Dur("timeout", timeout).
@@ -552,18 +552,18 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 	actualDuration := time.Since(startTime)
 
 	// Enhanced error detection and logging for connection vs query timeouts
-	
+
 	// Log any context cancellation (timeout, cancellation, etc) with correct operation name
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		
+
 		// Detect likely pool exhaustion vs query timeout
 		isPoolExhausted := (inUse >= openConns) && (idle == 0) && (waitCount > 0)
 		timeoutType := "query_timeout"
 		if isPoolExhausted && actualDuration < timeout/2 {
 			timeoutType = "pool_acquisition_timeout"
 		}
-		
+
 		if logger != nil {
 			logger.Error().
 				Str("operation", operationName).
@@ -595,22 +595,22 @@ func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
 func SafeQueryTimeout(timeout time.Duration, query string, args ...interface{}) (*sql.Rows, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
-	
+
 	rows, err := Db.QueryContext(ctx, query, args...)
-	
+
 	// Log context cancellation issues for debugging
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeQueryTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	// Schedule context cancellation after a delay to allow row scanning
 	// This prevents resource leaks while allowing proper row consumption
 	go func() {
 		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
 		cancel()
 	}()
-	
+
 	return rows, err
 }
 
@@ -666,21 +666,21 @@ func SafeQueryRow(query string, args ...interface{}) *sql.Row {
 func SafeQueryRowTimeout(timeout time.Duration, query string, args ...interface{}) *sql.Row {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
-	
+
 	row := Db.QueryRowContext(ctx, query, args...)
-	
+
 	// Note: QueryRow doesn't return error directly, but we can check context state
 	if ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeQueryRowTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	// Schedule context cancellation after a delay to allow row scanning
 	go func() {
 		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
 		cancel()
 	}()
-	
+
 	return row
 }
 
@@ -715,21 +715,21 @@ func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
 func SafeNamedQueryTimeout(timeout time.Duration, query string, arg interface{}) (*sqlx.Rows, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
-	
+
 	rows, err := Db.NamedQueryContext(ctx, query, arg)
-	
+
 	// Log context cancellation issues for debugging
 	if err != nil && ctx.Err() != nil {
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeNamedQueryTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-	
+
 	// Schedule context cancellation after a delay to allow row scanning
 	go func() {
 		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
 		cancel()
 	}()
-	
+
 	return rows, err
 }
 
@@ -756,7 +756,7 @@ func GetPoolStats() (openConns, inUse, idle int32, waitCount int64, waitDuration
 		idle = stats.IdleConns()
 		waitCount = stats.EmptyAcquireCount()
 		waitDuration = stats.EmptyAcquireWaitTime()
-		
+
 		// Detect potential connection leaks - warn if connections exceed 80% of configured maximum
 		if logger != nil && openConns > int32(float64(DefaultConfig.MaxConnections)*0.8) {
 			logger.Warn().
@@ -768,7 +768,7 @@ func GetPoolStats() (openConns, inUse, idle int32, waitCount int64, waitDuration
 				Int("configured_max", DefaultConfig.MaxConnections).
 				Msg("Potential connection leak detected - connections exceed 80% of configured maximum")
 		}
-		
+
 		return openConns, inUse, idle, waitCount, waitDuration
 	} else {
 		// Fall back to database/sql stats (less accurate with our setup)
