@@ -39,6 +39,19 @@ func isJSONBType(val interface{}) bool {
 		return false
 	}
 
+	// Check if it's a nil pointer
+	reflectVal := reflect.ValueOf(val)
+	if reflectVal.Kind() == reflect.Ptr && reflectVal.IsNil() {
+		return false
+	}
+
+	// Additional check: see if it's a map or has "LocalizedText" or "Dictionary" in the type name
+	// This helps identify octypes.LocalizedText and octypes.IntDictionary
+	typeName := reflect.TypeOf(val).String()
+	if strings.Contains(typeName, "LocalizedText") || strings.Contains(typeName, "Dictionary") {
+		return true
+	}
+
 	// Check if the type implements driver.Valuer
 	valuer, ok := val.(driver.Valuer)
 	if !ok {
@@ -57,22 +70,12 @@ func isJSONBType(val interface{}) bool {
 		return false
 	}
 
-	// Additional check: see if it's a map or has "LocalizedText" or "Dictionary" in the type name
-	// This helps identify octypes.LocalizedText and octypes.IntDictionary
-	typeName := reflect.TypeOf(val).String()
-	if strings.Contains(typeName, "LocalizedText") || strings.Contains(typeName, "Dictionary") {
-		return true
-	}
-
 	// Check if the underlying value is a map (common for JSON types)
-	reflectVal := reflect.ValueOf(val)
 	if reflectVal.Kind() == reflect.Ptr {
 		reflectVal = reflectVal.Elem()
 	}
 	if reflectVal.Kind() == reflect.Map {
-		// Verify it's actually JSON by trying to marshal
-		_, err := json.Marshal(val)
-		return err == nil
+		return true
 	}
 
 	return false
