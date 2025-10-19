@@ -1,7 +1,10 @@
 package fsql
 
 import (
+	"database/sql/driver"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/google/uuid"
@@ -29,6 +32,52 @@ type QueryBuilder struct {
 	Steps []QueryStep
 }
 
+// isJSONBType checks if a value should be cast to JSONB in SQL queries.
+// This is needed for PgBouncer transaction pooling mode which doesn't support prepared statements.
+func isJSONBType(val interface{}) bool {
+	if val == nil {
+		return false
+	}
+
+	// Check if the type implements driver.Valuer
+	valuer, ok := val.(driver.Valuer)
+	if !ok {
+		return false
+	}
+
+	// Call Value() to see if it returns []byte (JSON)
+	driverVal, err := valuer.Value()
+	if err != nil || driverVal == nil {
+		return false
+	}
+
+	// Check if the result is []byte (which is what json.Marshal returns)
+	_, isByte := driverVal.([]byte)
+	if !isByte {
+		return false
+	}
+
+	// Additional check: see if it's a map or has "LocalizedText" or "Dictionary" in the type name
+	// This helps identify octypes.LocalizedText and octypes.IntDictionary
+	typeName := reflect.TypeOf(val).String()
+	if strings.Contains(typeName, "LocalizedText") || strings.Contains(typeName, "Dictionary") {
+		return true
+	}
+
+	// Check if the underlying value is a map (common for JSON types)
+	reflectVal := reflect.ValueOf(val)
+	if reflectVal.Kind() == reflect.Ptr {
+		reflectVal = reflectVal.Elem()
+	}
+	if reflectVal.Kind() == reflect.Map {
+		// Verify it's actually JSON by trying to marshal
+		_, err := json.Marshal(val)
+		return err == nil
+	}
+
+	return false
+}
+
 func GetInsertQuery(tableName string, valuesMap map[string]interface{}, returning string) (string, []interface{}) {
 	_, fields := GetInsertFields(tableName)
 	defaultValues := GetInsertValues(tableName)
@@ -39,8 +88,28 @@ func GetInsertQuery(tableName string, valuesMap map[string]interface{}, returnin
 	for _, field := range fields {
 		if val, ok := valuesMap[field]; ok {
 			// If value is provided in valuesMap, use it
-			placeholders = append(placeholders, fmt.Sprintf("$%d", counter))
-			queryValues = append(queryValues, val)
+			// Add ::jsonb cast for JSONB types (needed for PgBouncer transaction pooling)
+			if isJSONBType(val) {
+				placeholders = append(placeholders, fmt.Sprintf("$%d::jsonb", counter))
+				// Get JSON from Value() method to preserve correct field names
+				if valuer, ok := val.(driver.Valuer); ok {
+					driverVal, err := valuer.Value()
+					if err == nil && driverVal != nil {
+						if jsonBytes, ok := driverVal.([]byte); ok {
+							queryValues = append(queryValues, string(jsonBytes))
+						} else {
+							queryValues = append(queryValues, val)
+						}
+					} else {
+						queryValues = append(queryValues, val)
+					}
+				} else {
+					queryValues = append(queryValues, val)
+				}
+			} else {
+				placeholders = append(placeholders, fmt.Sprintf("$%d", counter))
+				queryValues = append(queryValues, val)
+			}
 			counter++
 		} else if defVal, ok := defaultValues[field]; ok {
 			// Else use the default value from tags
@@ -69,10 +138,31 @@ func GetUpdateQuery(tableName string, valuesMap map[string]interface{}, returnin
 
 	for _, field := range fields {
 		if value, exists := valuesMap[field]; exists {
-			setClause := fmt.Sprintf(`%s = $%d`, field, counter)
+			// Add ::jsonb cast for JSONB types (needed for PgBouncer transaction pooling)
+			var setClause string
+			if isJSONBType(value) {
+				setClause = fmt.Sprintf(`%s = $%d::jsonb`, field, counter)
+				// Get JSON from Value() method to preserve correct field names
+				if valuer, ok := value.(driver.Valuer); ok {
+					driverVal, err := valuer.Value()
+					if err == nil && driverVal != nil {
+						if jsonBytes, ok := driverVal.([]byte); ok {
+							queryValues = append(queryValues, string(jsonBytes))
+						} else {
+							queryValues = append(queryValues, value)
+						}
+					} else {
+						queryValues = append(queryValues, value)
+					}
+				} else {
+					queryValues = append(queryValues, value)
+				}
+			} else {
+				setClause = fmt.Sprintf(`%s = $%d`, field, counter)
+				queryValues = append(queryValues, value)
+			}
 
 			setClauses = append(setClauses, setClause)
-			queryValues = append(queryValues, value)
 			counter++
 		}
 	}
