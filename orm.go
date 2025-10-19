@@ -2,7 +2,6 @@ package fsql
 
 import (
 	"database/sql/driver"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
