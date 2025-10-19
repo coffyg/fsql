@@ -168,7 +168,6 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	poolConfig.MinConns = int32(config.MinConnections)
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
-
 	// Configure connection timeouts to prevent hanging
 	poolConfig.ConnConfig.ConnectTimeout = 10 * time.Second // Connection establishment timeout
 	poolConfig.HealthCheckPeriod = 30 * time.Second         // Health check interval - reduced for faster recovery
@@ -180,6 +179,8 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	pool.Config().ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	pool.Config().ConnConfig.StatementCacheCapacity = 0
 
 	// Store pool reference for accurate stats
 	mainPool = pool
@@ -197,22 +198,24 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 // PgxCreateDB creates a simple connection without pooling
 func PgxCreateDB(uri string, config ...DBConfig) (*sqlx.DB, error) {
 	// Get effective configuration (for potential future use)
-	_ = DefaultConfig
+	cfg := DefaultConfig
 	if len(config) > 0 {
-		_ = config[0]
+		cfg = config[0]
 	}
 
 	connConfig, err := pgx.ParseConfig(uri)
 	if err != nil {
 		return nil, err
 	}
-
+	connConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	connConfig.StatementCacheCapacity = 0
 	pgxdb := stdlib.OpenDB(*connConfig)
 	db := sqlx.NewDb(pgxdb, "pgx")
-
-	// Let pgx handle connection management - don't set database/sql limits
-	// Setting these can interfere with pgx's connection handling
-	// The pgx driver manages connections internally
+	// Apply custom configuration
+	db.SetMaxOpenConns(cfg.MaxConnections)
+	db.SetMaxIdleConns(cfg.MinConnections)
+	db.SetConnMaxLifetime(cfg.MaxConnLifetime)
+	db.SetConnMaxIdleTime(cfg.MaxConnIdleTime)
 
 	return db, nil
 }
