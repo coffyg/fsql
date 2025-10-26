@@ -107,10 +107,10 @@ func (c *PreparedStmtCache) evictLRU() {
 	}
 	
 	if oldestKey != "" {
-		// Close the statement
+		// Close the statement synchronously
 		stmt := c.statements[oldestKey]
-		go stmt.stmt.Close() // Close in background
-		
+		stmt.stmt.Close()
+
 		// Remove from cache
 		delete(c.statements, oldestKey)
 	}

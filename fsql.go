@@ -217,6 +217,12 @@ func CloseDB() {
 	// Clear prepared statement cache
 	ClearPreparedCache()
 
+	// Close the underlying pool first (critical for proper cleanup)
+	if mainPool != nil {
+		mainPool.Close()
+		mainPool = nil
+	}
+
 	if Db != nil {
 		if err := Db.Close(); err != nil {
 			log.Printf("Error closing database: %v", err)
@@ -529,10 +535,9 @@ func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
 }
 
 // SafeQueryTimeout wraps Db.Query with custom timeout
-// Note: Uses timeout context for query execution but allows row scanning after context expires
 func SafeQueryTimeout(timeout time.Duration, query string, args ...interface{}) (*sql.Rows, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
+	defer cancel()
 
 	rows, err := Db.QueryContext(ctx, query, args...)
 
@@ -541,13 +546,6 @@ func SafeQueryTimeout(timeout time.Duration, query string, args ...interface{}) 
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeQueryTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-
-	// Schedule context cancellation after a delay to allow row scanning
-	// This prevents resource leaks while allowing proper row consumption
-	go func() {
-		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
-		cancel()
-	}()
 
 	return rows, err
 }
@@ -600,10 +598,9 @@ func SafeQueryRow(query string, args ...interface{}) *sql.Row {
 }
 
 // SafeQueryRowTimeout wraps Db.QueryRow with custom timeout
-// Note: Uses timeout context for query execution but allows row scanning after context expires
 func SafeQueryRowTimeout(timeout time.Duration, query string, args ...interface{}) *sql.Row {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
+	defer cancel()
 
 	row := Db.QueryRowContext(ctx, query, args...)
 
@@ -612,12 +609,6 @@ func SafeQueryRowTimeout(timeout time.Duration, query string, args ...interface{
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeQueryRowTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-
-	// Schedule context cancellation after a delay to allow row scanning
-	go func() {
-		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
-		cancel()
-	}()
 
 	return row
 }
@@ -649,10 +640,9 @@ func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
 }
 
 // SafeNamedQueryTimeout wraps Db.NamedQuery with custom timeout
-// Note: Uses timeout context for query execution but allows row scanning after context expires
 func SafeNamedQueryTimeout(timeout time.Duration, query string, arg interface{}) (*sqlx.Rows, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	// Let context expire naturally - DON'T cancel immediately as it breaks row scanning
+	defer cancel()
 
 	rows, err := Db.NamedQueryContext(ctx, query, arg)
 
@@ -661,12 +651,6 @@ func SafeNamedQueryTimeout(timeout time.Duration, query string, arg interface{})
 		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
 		logQueryTimeout("SafeNamedQueryTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
 	}
-
-	// Schedule context cancellation after a delay to allow row scanning
-	go func() {
-		time.Sleep(timeout + 5*time.Second) // Give extra time for row scanning
-		cancel()
-	}()
 
 	return rows, err
 }

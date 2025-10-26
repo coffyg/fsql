@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -15,7 +16,9 @@ import (
 
 // Tx represents a database transaction with enhanced features
 type Tx struct {
-	tx *sqlx.Tx
+	tx        *sqlx.Tx
+	stmtCache map[string]*sqlx.Stmt
+	mu        sync.Mutex
 }
 
 // TxOptions defines the options for transactions
@@ -94,13 +97,21 @@ func (tx *Tx) Commit() error {
 	if tx.tx == nil {
 		return ErrTxDone
 	}
-	
+
+	// Close all cached statements before commit
+	tx.mu.Lock()
+	for _, stmt := range tx.stmtCache {
+		stmt.Close()
+	}
+	tx.stmtCache = nil
+	tx.mu.Unlock()
+
 	err := tx.tx.Commit()
 	tx.tx = nil
 	if err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -109,13 +120,21 @@ func (tx *Tx) Rollback() error {
 	if tx.tx == nil {
 		return ErrTxDone
 	}
-	
+
+	// Close all cached statements before rollback
+	tx.mu.Lock()
+	for _, stmt := range tx.stmtCache {
+		stmt.Close()
+	}
+	tx.stmtCache = nil
+	tx.mu.Unlock()
+
 	err := tx.tx.Rollback()
 	tx.tx = nil
 	if err != nil {
 		return fmt.Errorf("failed to rollback transaction: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -124,14 +143,24 @@ func (tx *Tx) Exec(query string, args ...interface{}) (sql.Result, error) {
 	if tx.tx == nil {
 		return nil, ErrTxDone
 	}
-	
-	// Get or create prepared statement for better performance
-	stmt, err := tx.tx.Preparex(query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to prepare statement in transaction: %w", err)
+
+	// Get or create prepared statement from cache
+	tx.mu.Lock()
+	stmt, ok := tx.stmtCache[query]
+	if !ok {
+		var err error
+		stmt, err = tx.tx.Preparex(query)
+		if err != nil {
+			tx.mu.Unlock()
+			return nil, fmt.Errorf("failed to prepare statement in transaction: %w", err)
+		}
+		if tx.stmtCache == nil {
+			tx.stmtCache = make(map[string]*sqlx.Stmt)
+		}
+		tx.stmtCache[query] = stmt
 	}
-	defer stmt.Close()
-	
+	tx.mu.Unlock()
+
 	return stmt.Exec(args...)
 }
 
@@ -140,14 +169,24 @@ func (tx *Tx) ExecContext(ctx context.Context, query string, args ...interface{}
 	if tx.tx == nil {
 		return nil, ErrTxDone
 	}
-	
-	// Get or create prepared statement for better performance
-	stmt, err := tx.tx.PreparexContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to prepare statement in transaction: %w", err)
+
+	// Get or create prepared statement from cache
+	tx.mu.Lock()
+	stmt, ok := tx.stmtCache[query]
+	if !ok {
+		var err error
+		stmt, err = tx.tx.PreparexContext(ctx, query)
+		if err != nil {
+			tx.mu.Unlock()
+			return nil, fmt.Errorf("failed to prepare statement in transaction: %w", err)
+		}
+		if tx.stmtCache == nil {
+			tx.stmtCache = make(map[string]*sqlx.Stmt)
+		}
+		tx.stmtCache[query] = stmt
 	}
-	defer stmt.Close()
-	
+	tx.mu.Unlock()
+
 	return stmt.ExecContext(ctx, args...)
 }
 
@@ -192,14 +231,24 @@ func (tx *Tx) Get(dest interface{}, query string, args ...interface{}) error {
 	if tx.tx == nil {
 		return ErrTxDone
 	}
-	
-	// Use prepared statement for better performance
-	stmt, err := tx.tx.Preparex(query)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement in transaction: %w", err)
+
+	// Get or create prepared statement from cache
+	tx.mu.Lock()
+	stmt, ok := tx.stmtCache[query]
+	if !ok {
+		var err error
+		stmt, err = tx.tx.Preparex(query)
+		if err != nil {
+			tx.mu.Unlock()
+			return fmt.Errorf("failed to prepare statement in transaction: %w", err)
+		}
+		if tx.stmtCache == nil {
+			tx.stmtCache = make(map[string]*sqlx.Stmt)
+		}
+		tx.stmtCache[query] = stmt
 	}
-	defer stmt.Close()
-	
+	tx.mu.Unlock()
+
 	return stmt.Get(dest, args...)
 }
 
@@ -208,14 +257,24 @@ func (tx *Tx) GetContext(ctx context.Context, dest interface{}, query string, ar
 	if tx.tx == nil {
 		return ErrTxDone
 	}
-	
-	// Use prepared statement for better performance
-	stmt, err := tx.tx.PreparexContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement in transaction: %w", err)
+
+	// Get or create prepared statement from cache
+	tx.mu.Lock()
+	stmt, ok := tx.stmtCache[query]
+	if !ok {
+		var err error
+		stmt, err = tx.tx.PreparexContext(ctx, query)
+		if err != nil {
+			tx.mu.Unlock()
+			return fmt.Errorf("failed to prepare statement in transaction: %w", err)
+		}
+		if tx.stmtCache == nil {
+			tx.stmtCache = make(map[string]*sqlx.Stmt)
+		}
+		tx.stmtCache[query] = stmt
 	}
-	defer stmt.Close()
-	
+	tx.mu.Unlock()
+
 	return stmt.GetContext(ctx, dest, args...)
 }
 
@@ -224,14 +283,24 @@ func (tx *Tx) Select(dest interface{}, query string, args ...interface{}) error 
 	if tx.tx == nil {
 		return ErrTxDone
 	}
-	
-	// Use prepared statement for better performance
-	stmt, err := tx.tx.Preparex(query)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement in transaction: %w", err)
+
+	// Get or create prepared statement from cache
+	tx.mu.Lock()
+	stmt, ok := tx.stmtCache[query]
+	if !ok {
+		var err error
+		stmt, err = tx.tx.Preparex(query)
+		if err != nil {
+			tx.mu.Unlock()
+			return fmt.Errorf("failed to prepare statement in transaction: %w", err)
+		}
+		if tx.stmtCache == nil {
+			tx.stmtCache = make(map[string]*sqlx.Stmt)
+		}
+		tx.stmtCache[query] = stmt
 	}
-	defer stmt.Close()
-	
+	tx.mu.Unlock()
+
 	return stmt.Select(dest, args...)
 }
 
@@ -240,14 +309,24 @@ func (tx *Tx) SelectContext(ctx context.Context, dest interface{}, query string,
 	if tx.tx == nil {
 		return ErrTxDone
 	}
-	
-	// Use prepared statement for better performance
-	stmt, err := tx.tx.PreparexContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement in transaction: %w", err)
+
+	// Get or create prepared statement from cache
+	tx.mu.Lock()
+	stmt, ok := tx.stmtCache[query]
+	if !ok {
+		var err error
+		stmt, err = tx.tx.PreparexContext(ctx, query)
+		if err != nil {
+			tx.mu.Unlock()
+			return fmt.Errorf("failed to prepare statement in transaction: %w", err)
+		}
+		if tx.stmtCache == nil {
+			tx.stmtCache = make(map[string]*sqlx.Stmt)
+		}
+		tx.stmtCache[query] = stmt
 	}
-	defer stmt.Close()
-	
+	tx.mu.Unlock()
+
 	return stmt.SelectContext(ctx, dest, args...)
 }
 
