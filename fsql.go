@@ -529,25 +529,16 @@ func SafeExecTimeout(timeout time.Duration, query string, args ...interface{}) (
 	return result, err
 }
 
-// SafeQuery wraps Db.Query with automatic timeout
+// SafeQuery wraps Db.Query without timeout (iterator consumed after return)
+// Use server-side statement_timeout for query protection
 func SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
-	return SafeQueryTimeout(DefaultDBTimeout, query, args...)
+	return Db.QueryContext(context.Background(), query, args...)
 }
 
-// SafeQueryTimeout wraps Db.Query with custom timeout
+// SafeQueryTimeout wraps Db.Query without timeout (iterator consumed after return)
+// Use server-side statement_timeout for query protection
 func SafeQueryTimeout(timeout time.Duration, query string, args ...interface{}) (*sql.Rows, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	rows, err := Db.QueryContext(ctx, query, args...)
-
-	// Log context cancellation issues for debugging
-	if err != nil && ctx.Err() != nil {
-		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeQueryTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
-	}
-
-	return rows, err
+	return Db.QueryContext(context.Background(), query, args...)
 }
 
 // SafeGet wraps Db.Get with automatic timeout
@@ -634,25 +625,16 @@ func SafeNamedExecTimeout(timeout time.Duration, query string, arg interface{}) 
 	return result, err
 }
 
-// SafeNamedQuery wraps Db.NamedQuery with automatic timeout
+// SafeNamedQuery wraps Db.NamedQuery without timeout (iterator consumed after return)
+// Use server-side statement_timeout for query protection
 func SafeNamedQuery(query string, arg interface{}) (*sqlx.Rows, error) {
-	return SafeNamedQueryTimeout(DefaultDBTimeout, query, arg)
+	return Db.NamedQueryContext(context.Background(), query, arg)
 }
 
-// SafeNamedQueryTimeout wraps Db.NamedQuery with custom timeout
+// SafeNamedQueryTimeout wraps Db.NamedQuery without timeout (iterator consumed after return)
+// Use server-side statement_timeout for query protection
 func SafeNamedQueryTimeout(timeout time.Duration, query string, arg interface{}) (*sqlx.Rows, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	rows, err := Db.NamedQueryContext(ctx, query, arg)
-
-	// Log context cancellation issues for debugging
-	if err != nil && ctx.Err() != nil {
-		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeNamedQueryTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
-	}
-
-	return rows, err
+	return Db.NamedQueryContext(context.Background(), query, arg)
 }
 
 // SafeBegin wraps Db.BeginTx (no timeout for transaction creation - transactions are long-lived)
