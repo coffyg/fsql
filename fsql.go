@@ -583,25 +583,16 @@ func SafeSelectTimeout(timeout time.Duration, dest interface{}, query string, ar
 	return err
 }
 
-// SafeQueryRow wraps Db.QueryRow with automatic timeout
+// SafeQueryRow wraps Db.QueryRow without timeout (Scan happens after return)
+// Use server-side statement_timeout for query protection
 func SafeQueryRow(query string, args ...interface{}) *sql.Row {
-	return SafeQueryRowTimeout(DefaultDBTimeout, query, args...)
+	return Db.QueryRowContext(context.Background(), query, args...)
 }
 
-// SafeQueryRowTimeout wraps Db.QueryRow with custom timeout
+// SafeQueryRowTimeout wraps Db.QueryRow without timeout (Scan happens after return)
+// Use server-side statement_timeout for query protection
 func SafeQueryRowTimeout(timeout time.Duration, query string, args ...interface{}) *sql.Row {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	row := Db.QueryRowContext(ctx, query, args...)
-
-	// Note: QueryRow doesn't return error directly, but we can check context state
-	if ctx.Err() != nil {
-		openConns, inUse, idle, waitCount, waitDuration := GetPoolStats()
-		logQueryTimeout("SafeQueryRowTimeout", query, timeout, openConns, inUse, idle, waitCount, waitDuration)
-	}
-
-	return row
+	return Db.QueryRowContext(context.Background(), query, args...)
 }
 
 // SafeNamedExec wraps Db.NamedExec with automatic timeout
