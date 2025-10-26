@@ -46,12 +46,8 @@ type DBConnection struct {
 
 // Pool configuration
 type DBConfig struct {
-	MaxConnections  int
-	MinConnections  int
-	MaxConnLifetime time.Duration
-	MaxConnIdleTime time.Duration
-	HealthCheck     bool
-	DefaultTimeout  time.Duration
+	MaxConnections int
+	MinConnections int
 }
 
 // Global database connections
@@ -67,12 +63,8 @@ var (
 
 	// Default configuration - reasonable production defaults
 	DefaultConfig = DBConfig{
-		MaxConnections:  50, // Reasonable default instead of crazy 1200
-		MinConnections:  5,
-		MaxConnLifetime: 5 * time.Minute,
-		MaxConnIdleTime: 5 * time.Minute,
-		HealthCheck:     false,
-		DefaultTimeout:  3 * time.Second, // Reasonable timeout for complex queries
+		MaxConnections: 50, // Reasonable default instead of crazy 1200
+		MinConnections: 5,
 	}
 )
 
@@ -166,13 +158,6 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	// Apply custom configuration
 	poolConfig.MaxConns = int32(config.MaxConnections)
 	poolConfig.MinConns = int32(config.MinConnections)
-	poolConfig.MaxConnLifetime = config.MaxConnLifetime
-	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
-	// Configure connection timeouts to prevent hanging
-	poolConfig.ConnConfig.ConnectTimeout = 10 * time.Second // Connection establishment timeout
-	poolConfig.HealthCheckPeriod = 30 * time.Second         // Health check interval - reduced for faster recovery
-	// pgx v5 pool acquisition timeout is handled via context timeouts in Safe* functions
-	// This prevents the 5k connection leak issue by failing fast instead of hanging
 
 	// Create the connection pool
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
@@ -188,35 +173,6 @@ func PgxCreateDBWithPool(uri string, config DBConfig) (*sqlx.DB, error) {
 	// Wrap pgxpool.Pool as sqlx.DB using stdlib
 	db := sqlx.NewDb(stdlib.OpenDBFromPool(pool), "pgx")
 
-	// Let pgxpool handle all connection management - don't set database/sql limits
-	// Setting these to 0/-1 can create conflicts with pgxpool's internal management
-	// The pgxpool configuration above handles all connection limits and timeouts
-
-	return db, nil
-}
-
-// PgxCreateDB creates a simple connection without pooling
-func PgxCreateDB(uri string, config ...DBConfig) (*sqlx.DB, error) {
-	// Get effective configuration (for potential future use)
-	cfg := DefaultConfig
-	if len(config) > 0 {
-		cfg = config[0]
-	}
-
-	connConfig, err := pgx.ParseConfig(uri)
-	if err != nil {
-		return nil, err
-	}
-	connConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
-	connConfig.StatementCacheCapacity = 0
-	pgxdb := stdlib.OpenDB(*connConfig)
-	db := sqlx.NewDb(pgxdb, "pgx")
-	// Apply custom configuration
-	db.SetMaxOpenConns(cfg.MaxConnections)
-	db.SetMaxIdleConns(cfg.MinConnections)
-	db.SetConnMaxLifetime(cfg.MaxConnLifetime)
-	db.SetConnMaxIdleTime(cfg.MaxConnIdleTime)
-
 	return db, nil
 }
 
@@ -228,22 +184,12 @@ func InitDBPool(database string, config ...DBConfig) {
 		cfg = config[0]
 		// Update entire global config when config is explicitly passed
 		DefaultConfig = cfg
-		DefaultDBTimeout = cfg.DefaultTimeout
 	}
 
 	Db, err = PgxCreateDBWithPool(database, cfg)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-}
-
-// InitCustomDb creates a custom database connection
-func InitCustomDb(database string) *sqlx.DB {
-	db, err := PgxCreateDB(database)
-	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
-	}
-	return db
 }
 
 // InitDB initializes the main database connection without pooling
@@ -254,11 +200,10 @@ func InitDB(database string, config ...DBConfig) {
 		cfg = config[0]
 		// Update entire global config when config is explicitly passed
 		DefaultConfig = cfg
-		DefaultDBTimeout = cfg.DefaultTimeout
 	}
 
 	var err error
-	Db, err = PgxCreateDB(database, cfg)
+	Db, err = PgxCreateDBWithPool(database, cfg)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -299,12 +244,7 @@ func InitDbReplicas(databases []string, config ...DBConfig) {
 		var err error
 
 		// Create replica with pool if configured
-		if cfg.MaxConnections > 0 {
-			replicaDb, err = PgxCreateDBWithPool(dbURI, cfg)
-		} else {
-			replicaDb, err = PgxCreateDB(dbURI)
-		}
-
+		replicaDb, err = PgxCreateDBWithPool(dbURI, cfg)
 		if err != nil {
 			log.Printf("Failed to connect to replica database %s: %v", dbURI, err)
 			continue
@@ -317,11 +257,6 @@ func InitDbReplicas(databases []string, config ...DBConfig) {
 			FailureCount: 0,
 			State:        connStateHealthy,
 		})
-	}
-
-	// Start health check if enabled and there are replicas
-	if cfg.HealthCheck && len(readReplicasDbs) > 0 {
-		startHealthCheck()
 	}
 }
 
