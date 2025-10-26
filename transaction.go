@@ -8,17 +8,16 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 )
 
 // Tx represents a database transaction with enhanced features
+// WARNING: Tx is NOT safe for concurrent use by multiple goroutines.
+// Each transaction should only be used from a single goroutine at a time.
 type Tx struct {
-	tx        *sqlx.Tx
-	stmtCache map[string]*sqlx.Stmt
-	mu        sync.Mutex
+	tx *sqlx.Tx
 }
 
 // TxOptions defines the options for transactions
@@ -98,14 +97,6 @@ func (tx *Tx) Commit() error {
 		return ErrTxDone
 	}
 
-	// Close all cached statements before commit
-	tx.mu.Lock()
-	for _, stmt := range tx.stmtCache {
-		stmt.Close()
-	}
-	tx.stmtCache = nil
-	tx.mu.Unlock()
-
 	err := tx.tx.Commit()
 	tx.tx = nil
 	if err != nil {
@@ -120,14 +111,6 @@ func (tx *Tx) Rollback() error {
 	if tx.tx == nil {
 		return ErrTxDone
 	}
-
-	// Close all cached statements before rollback
-	tx.mu.Lock()
-	for _, stmt := range tx.stmtCache {
-		stmt.Close()
-	}
-	tx.stmtCache = nil
-	tx.mu.Unlock()
 
 	err := tx.tx.Rollback()
 	tx.tx = nil
@@ -144,24 +127,7 @@ func (tx *Tx) Exec(query string, args ...interface{}) (sql.Result, error) {
 		return nil, ErrTxDone
 	}
 
-	// Get or create prepared statement from cache
-	tx.mu.Lock()
-	stmt, ok := tx.stmtCache[query]
-	if !ok {
-		var err error
-		stmt, err = tx.tx.Preparex(query)
-		if err != nil {
-			tx.mu.Unlock()
-			return nil, fmt.Errorf("failed to prepare statement in transaction: %w", err)
-		}
-		if tx.stmtCache == nil {
-			tx.stmtCache = make(map[string]*sqlx.Stmt)
-		}
-		tx.stmtCache[query] = stmt
-	}
-	tx.mu.Unlock()
-
-	return stmt.Exec(args...)
+	return tx.tx.Exec(query, args...)
 }
 
 // ExecContext executes a query with a context within the transaction
@@ -170,24 +136,7 @@ func (tx *Tx) ExecContext(ctx context.Context, query string, args ...interface{}
 		return nil, ErrTxDone
 	}
 
-	// Get or create prepared statement from cache
-	tx.mu.Lock()
-	stmt, ok := tx.stmtCache[query]
-	if !ok {
-		var err error
-		stmt, err = tx.tx.PreparexContext(ctx, query)
-		if err != nil {
-			tx.mu.Unlock()
-			return nil, fmt.Errorf("failed to prepare statement in transaction: %w", err)
-		}
-		if tx.stmtCache == nil {
-			tx.stmtCache = make(map[string]*sqlx.Stmt)
-		}
-		tx.stmtCache[query] = stmt
-	}
-	tx.mu.Unlock()
-
-	return stmt.ExecContext(ctx, args...)
+	return tx.tx.ExecContext(ctx, query, args...)
 }
 
 // Query executes a query that returns rows within the transaction
@@ -232,24 +181,7 @@ func (tx *Tx) Get(dest interface{}, query string, args ...interface{}) error {
 		return ErrTxDone
 	}
 
-	// Get or create prepared statement from cache
-	tx.mu.Lock()
-	stmt, ok := tx.stmtCache[query]
-	if !ok {
-		var err error
-		stmt, err = tx.tx.Preparex(query)
-		if err != nil {
-			tx.mu.Unlock()
-			return fmt.Errorf("failed to prepare statement in transaction: %w", err)
-		}
-		if tx.stmtCache == nil {
-			tx.stmtCache = make(map[string]*sqlx.Stmt)
-		}
-		tx.stmtCache[query] = stmt
-	}
-	tx.mu.Unlock()
-
-	return stmt.Get(dest, args...)
+	return tx.tx.Get(dest, query, args...)
 }
 
 // GetContext retrieves a single item with context from the database within the transaction
@@ -258,24 +190,7 @@ func (tx *Tx) GetContext(ctx context.Context, dest interface{}, query string, ar
 		return ErrTxDone
 	}
 
-	// Get or create prepared statement from cache
-	tx.mu.Lock()
-	stmt, ok := tx.stmtCache[query]
-	if !ok {
-		var err error
-		stmt, err = tx.tx.PreparexContext(ctx, query)
-		if err != nil {
-			tx.mu.Unlock()
-			return fmt.Errorf("failed to prepare statement in transaction: %w", err)
-		}
-		if tx.stmtCache == nil {
-			tx.stmtCache = make(map[string]*sqlx.Stmt)
-		}
-		tx.stmtCache[query] = stmt
-	}
-	tx.mu.Unlock()
-
-	return stmt.GetContext(ctx, dest, args...)
+	return tx.tx.GetContext(ctx, dest, query, args...)
 }
 
 // Select retrieves multiple items from the database within the transaction
@@ -284,24 +199,7 @@ func (tx *Tx) Select(dest interface{}, query string, args ...interface{}) error 
 		return ErrTxDone
 	}
 
-	// Get or create prepared statement from cache
-	tx.mu.Lock()
-	stmt, ok := tx.stmtCache[query]
-	if !ok {
-		var err error
-		stmt, err = tx.tx.Preparex(query)
-		if err != nil {
-			tx.mu.Unlock()
-			return fmt.Errorf("failed to prepare statement in transaction: %w", err)
-		}
-		if tx.stmtCache == nil {
-			tx.stmtCache = make(map[string]*sqlx.Stmt)
-		}
-		tx.stmtCache[query] = stmt
-	}
-	tx.mu.Unlock()
-
-	return stmt.Select(dest, args...)
+	return tx.tx.Select(dest, query, args...)
 }
 
 // SelectContext retrieves multiple items with context from the database within the transaction
@@ -310,24 +208,7 @@ func (tx *Tx) SelectContext(ctx context.Context, dest interface{}, query string,
 		return ErrTxDone
 	}
 
-	// Get or create prepared statement from cache
-	tx.mu.Lock()
-	stmt, ok := tx.stmtCache[query]
-	if !ok {
-		var err error
-		stmt, err = tx.tx.PreparexContext(ctx, query)
-		if err != nil {
-			tx.mu.Unlock()
-			return fmt.Errorf("failed to prepare statement in transaction: %w", err)
-		}
-		if tx.stmtCache == nil {
-			tx.stmtCache = make(map[string]*sqlx.Stmt)
-		}
-		tx.stmtCache[query] = stmt
-	}
-	tx.mu.Unlock()
-
-	return stmt.SelectContext(ctx, dest, args...)
+	return tx.tx.SelectContext(ctx, dest, query, args...)
 }
 
 // NamedExec executes a named query within the transaction
